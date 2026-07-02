@@ -16,7 +16,9 @@ function figmaAssetResolver() {
   }
 }
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  // GitHub Pages serves the app from /<repo-name>/
+  base: command === 'build' ? '/truck-driver-mobile-app/' : '/',
   plugins: [
     figmaAssetResolver(),
     // The React and Tailwind plugins are both required for Make, even if
@@ -29,4 +31,4 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src/app'),
     },
   },
-})
+}))
