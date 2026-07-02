@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import RouteSurveyMapDrawer, {
   RouteSurveyInfo,
+  formatGpsCoordinates,
 } from "./RouteSurveyMapDrawer";
 import { useSnackbar } from "../contexts/SnackbarContext";
 
@@ -121,13 +122,22 @@ export default function StateJobsList({
       "OBSERVATIONS",
       "------------",
       ...(survey.observationsList?.length
-        ? survey.observationsList.flatMap((obs, i) => [
-            `${i + 1}. [${obs.severity.toUpperCase()}] ${obs.title}`,
-            `   Location: ${obs.location}${obs.milepost ? ` (${obs.milepost})` : ""}`,
-            `   Recorded: ${new Date(obs.recordedAt).toLocaleString()}`,
-            ...(obs.note ? [`   Note: ${obs.note}`] : []),
-            "",
-          ])
+        ? survey.observationsList.flatMap((obs, i) => {
+            const typeLabel =
+              obs.type === "load-clearance"
+                ? "LOAD CLEARANCE ISSUE"
+                : obs.type === "safety-hazard"
+                  ? "SAFETY & HAZARD CONCERN"
+                  : "CUSTOM OBSERVATION";
+            return [
+              `${i + 1}. [${typeLabel}] ${obs.title}`,
+              `   Location / Landmark: ${formatGpsCoordinates(obs.latitude, obs.longitude)}`,
+              `   Description: ${obs.description}`,
+              `   Attachments: ${obs.attachments?.length ? obs.attachments.map((a) => `${a.name} (${a.source})`).join(", ") : "None"}`,
+              `   Recorded: ${new Date(obs.recordedAt).toLocaleString()}`,
+              "",
+            ];
+          })
         : ["No observations recorded.", ""]),
     ];
 

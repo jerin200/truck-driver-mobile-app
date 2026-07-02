@@ -11,34 +11,40 @@ import { Button } from "./ui/button";
 import {
   AlertTriangle,
   Calendar,
+  Camera,
   CheckCircle2,
-  CornerUpRight,
   Flag,
+  Image as ImageIcon,
   MapPin,
-  Route as RouteIcon,
   Ruler,
-  TrafficCone,
+  StickyNote,
   X,
-  Zap,
 } from "lucide-react";
 import trackingMapImage from "figma:asset/1f5cbd94e64bd6468d47d611846ed0c8a6eaf1a1.png";
 
 // ── Shared route survey types ────────────────────────────────────────────────
+// Observation types available to the pilot car driver during a route survey —
+// no other categories exist
+export interface SurveyObservationAttachment {
+  id: string;
+  name: string;
+  source: "camera" | "gallery";
+}
+
 export interface SurveyObservation {
   id: string;
-  type:
-    | "clearance"
-    | "construction"
-    | "hazard"
-    | "road"
-    | "utility"
-    | "turn";
-  severity: "info" | "caution" | "critical";
+  type: "load-clearance" | "safety-hazard" | "custom";
+  /** Observation title (driver-entered for Custom Observations) */
   title: string;
-  location: string;
-  milepost?: string;
+  /** GPS latitude auto-captured when the observation was created (read-only) */
+  latitude: number;
+  /** GPS longitude auto-captured when the observation was created (read-only) */
+  longitude: number;
+  /** Free-text description entered by the pilot car driver */
+  description: string;
+  /** Photos attached from the device camera or gallery */
+  attachments?: SurveyObservationAttachment[];
   recordedAt: string;
-  note?: string;
 }
 
 export interface RouteSurveyInfo {
@@ -107,38 +113,42 @@ const pointAlongRoute = (t: number) => {
   return ROUTE_POINTS[ROUTE_POINTS.length - 1];
 };
 
-const TYPE_ICONS: Record<
+// Styling per observation type — the only three categories in the survey workflow
+const TYPE_STYLES: Record<
   SurveyObservation["type"],
-  React.ComponentType<{ className?: string }>
+  {
+    icon: React.ComponentType<{ className?: string }>;
+    marker: string;
+    badge: string;
+    label: string;
+  }
 > = {
-  clearance: Ruler,
-  construction: TrafficCone,
-  hazard: AlertTriangle,
-  road: RouteIcon,
-  utility: Zap,
-  turn: CornerUpRight,
-};
-
-const SEVERITY_STYLES: Record<
-  SurveyObservation["severity"],
-  { marker: string; badge: string; label: string }
-> = {
-  critical: {
-    marker: "bg-red-500 border-red-600",
-    badge: "bg-red-50 text-red-700 border-red-200",
-    label: "Critical",
-  },
-  caution: {
+  "load-clearance": {
+    icon: Ruler,
     marker: "bg-amber-500 border-amber-600",
     badge: "bg-amber-50 text-amber-700 border-amber-200",
-    label: "Caution",
+    label: "Load Clearance Issue",
   },
-  info: {
+  "safety-hazard": {
+    icon: AlertTriangle,
+    marker: "bg-red-500 border-red-600",
+    badge: "bg-red-50 text-red-700 border-red-200",
+    label: "Safety & Hazard Concern",
+  },
+  custom: {
+    icon: StickyNote,
     marker: "bg-blue-500 border-blue-600",
     badge: "bg-blue-50 text-blue-700 border-blue-200",
-    label: "Info",
+    label: "Custom Observation",
   },
 };
+
+/** Format auto-captured GPS coordinates for the read-only Location / Landmark field */
+export const formatGpsCoordinates = (
+  latitude: number,
+  longitude: number,
+) =>
+  `${Math.abs(latitude).toFixed(4)}° ${latitude >= 0 ? "N" : "S"}, ${Math.abs(longitude).toFixed(4)}° ${longitude >= 0 ? "E" : "W"}`;
 
 const formatSurveyDateTime = (iso: string) => {
   const d = new Date(iso);
@@ -296,7 +306,7 @@ export default function RouteSurveyMapDrawer({
                   key={obs.id}
                   onClick={() => handleMarkerClick(obs.id)}
                   className={`absolute -translate-x-1/2 -translate-y-1/2 w-6 h-6 rounded-full border-2 border-white shadow-md flex items-center justify-center text-[10px] font-bold text-white transition-transform ${
-                    SEVERITY_STYLES[obs.severity].marker
+                    TYPE_STYLES[obs.type].marker
                   } ${isSelected ? "scale-125 ring-2 ring-white z-10" : ""}`}
                   style={{
                     left: `${pos.x}%`,
@@ -354,9 +364,8 @@ export default function RouteSurveyMapDrawer({
             ) : (
               <div className="space-y-2">
                 {observations.map((obs, index) => {
-                  const Icon = TYPE_ICONS[obs.type];
-                  const severity =
-                    SEVERITY_STYLES[obs.severity];
+                  const typeStyle = TYPE_STYLES[obs.type];
+                  const Icon = typeStyle.icon;
                   const recorded = formatSurveyDateTime(
                     obs.recordedAt,
                   );
@@ -376,40 +385,84 @@ export default function RouteSurveyMapDrawer({
                     >
                       <div className="flex items-start gap-2.5">
                         <div
-                          className={`w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-[10px] font-bold text-white border-2 border-white shadow ${severity.marker}`}
+                          className={`w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-[10px] font-bold text-white border-2 border-white shadow ${typeStyle.marker}`}
                         >
                           {index + 1}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-start justify-between gap-2">
-                            <span className="text-[13px] font-medium text-gray-900 flex items-center gap-1.5">
-                              <Icon className="h-3.5 w-3.5 text-gray-400 shrink-0" />
-                              {obs.title}
-                            </span>
-                            <span
-                              className={`shrink-0 px-1.5 py-0.5 rounded-full border text-[10px] font-medium ${severity.badge}`}
-                            >
-                              {severity.label}
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-gray-500 mt-1 flex items-center gap-1">
-                            <MapPin className="h-3 w-3 text-gray-400 shrink-0" />
-                            <span className="truncate">
-                              {obs.location}
-                            </span>
+                          {/* Observation type + title */}
+                          <span
+                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-[10px] font-medium ${typeStyle.badge}`}
+                          >
+                            <Icon className="h-3 w-3 shrink-0" />
+                            {typeStyle.label}
+                          </span>
+                          <p className="text-[13px] font-medium text-gray-900 mt-1.5">
+                            {obs.title}
                           </p>
-                          <p className="text-[10px] text-gray-400 mt-0.5">
-                            {obs.milepost
-                              ? `${obs.milepost} · `
-                              : ""}
+
+                          {/* Location / Landmark — GPS auto-captured, read-only */}
+                          <div className="mt-1.5">
+                            <p className="text-[10px] text-gray-400 uppercase tracking-wider">
+                              Location / Landmark
+                            </p>
+                            <p className="text-[11px] text-gray-600 mt-0.5 flex items-center gap-1">
+                              <MapPin className="h-3 w-3 text-gray-400 shrink-0" />
+                              <span className="tabular-nums">
+                                {formatGpsCoordinates(
+                                  obs.latitude,
+                                  obs.longitude,
+                                )}
+                              </span>
+                              <span className="px-1 py-px rounded bg-gray-100 text-[9px] text-gray-400 font-medium">
+                                GPS
+                              </span>
+                            </p>
+                          </div>
+
+                          {/* Description */}
+                          <div className="mt-1.5">
+                            <p className="text-[10px] text-gray-400 uppercase tracking-wider">
+                              Description
+                            </p>
+                            <p className="text-[11px] text-gray-600 mt-0.5 bg-gray-50 border border-gray-100 rounded-lg px-2 py-1.5">
+                              {obs.description}
+                            </p>
+                          </div>
+
+                          {/* Attachments — photos from camera or gallery */}
+                          {obs.attachments &&
+                            obs.attachments.length > 0 && (
+                              <div className="mt-1.5">
+                                <p className="text-[10px] text-gray-400 uppercase tracking-wider">
+                                  Attachments (
+                                  {obs.attachments.length})
+                                </p>
+                                <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                                  {obs.attachments.map(
+                                    (att) => (
+                                      <span
+                                        key={att.id}
+                                        className="inline-flex items-center gap-1 px-1.5 py-1 rounded-lg bg-gray-50 border border-gray-200 text-[10px] text-gray-600"
+                                      >
+                                        {att.source ===
+                                        "camera" ? (
+                                          <Camera className="h-3 w-3 text-gray-400" />
+                                        ) : (
+                                          <ImageIcon className="h-3 w-3 text-gray-400" />
+                                        )}
+                                        {att.name}
+                                      </span>
+                                    ),
+                                  )}
+                                </div>
+                              </div>
+                            )}
+
+                          <p className="text-[10px] text-gray-400 mt-1.5">
                             Recorded {recorded.date}{" "}
                             {recorded.time}
                           </p>
-                          {obs.note && (
-                            <p className="text-[11px] text-gray-600 mt-1.5 bg-gray-50 border border-gray-100 rounded-lg px-2 py-1.5">
-                              {obs.note}
-                            </p>
-                          )}
                         </div>
                       </div>
                     </button>
