@@ -13,6 +13,7 @@ import {
   Calendar,
   Camera,
   CheckCircle2,
+  Clock,
   Flag,
   Image as ImageIcon,
   MapPin,
@@ -119,26 +120,26 @@ const TYPE_STYLES: Record<
   {
     icon: React.ComponentType<{ className?: string }>;
     marker: string;
-    badge: string;
+    text: string;
     label: string;
   }
 > = {
   "load-clearance": {
     icon: Ruler,
     marker: "bg-amber-500 border-amber-600",
-    badge: "bg-amber-50 text-amber-700 border-amber-200",
+    text: "text-amber-600",
     label: "Load Clearance Issue",
   },
   "safety-hazard": {
     icon: AlertTriangle,
     marker: "bg-red-500 border-red-600",
-    badge: "bg-red-50 text-red-700 border-red-200",
+    text: "text-red-600",
     label: "Safety & Hazard Concern",
   },
   custom: {
     icon: StickyNote,
     marker: "bg-blue-500 border-blue-600",
-    badge: "bg-blue-50 text-blue-700 border-blue-200",
+    text: "text-blue-600",
     label: "Custom Observation",
   },
 };
@@ -377,93 +378,82 @@ export default function RouteSurveyMapDrawer({
                         listItemRefs.current[obs.id] = el;
                       }}
                       onClick={() => setSelectedObsId(obs.id)}
-                      className={`w-full text-left bg-white rounded-xl border p-3 transition-colors ${
+                      className={`w-full text-left bg-white rounded-xl border overflow-hidden transition-colors ${
                         isSelected
-                          ? "border-[#16A34A] ring-1 ring-[#BBF7D0] bg-[#F0FDF4]/40"
+                          ? "border-[#16A34A] ring-1 ring-[#BBF7D0]"
                           : "border-gray-200 hover:bg-gray-50"
                       }`}
                     >
-                      <div className="flex items-start gap-2.5">
-                        <div
-                          className={`w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-[10px] font-bold text-white border-2 border-white shadow ${typeStyle.marker}`}
-                        >
-                          {index + 1}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          {/* Observation type + title */}
-                          <span
-                            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-[10px] font-medium ${typeStyle.badge}`}
+                      <div className="p-3">
+                        {/* Header — number, title, type */}
+                        <div className="flex items-start gap-2.5">
+                          <div
+                            className={`w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-[10px] font-bold text-white border-2 border-white shadow ${typeStyle.marker}`}
                           >
-                            <Icon className="h-3 w-3 shrink-0" />
-                            {typeStyle.label}
-                          </span>
-                          <p className="text-[13px] font-medium text-gray-900 mt-1.5">
-                            {obs.title}
-                          </p>
-
-                          {/* Location / Landmark — GPS auto-captured, read-only */}
-                          <div className="mt-1.5">
-                            <p className="text-[10px] text-gray-400 uppercase tracking-wider">
-                              Location / Landmark
+                            {index + 1}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[13px] font-semibold text-gray-900 leading-snug">
+                              {obs.title}
                             </p>
-                            <p className="text-[11px] text-gray-600 mt-0.5 flex items-center gap-1">
-                              <MapPin className="h-3 w-3 text-gray-400 shrink-0" />
-                              <span className="tabular-nums">
-                                {formatGpsCoordinates(
-                                  obs.latitude,
-                                  obs.longitude,
-                                )}
-                              </span>
-                              <span className="px-1 py-px rounded bg-gray-100 text-[9px] text-gray-400 font-medium">
-                                GPS
-                              </span>
+                            <p
+                              className={`text-[11px] font-medium mt-0.5 flex items-center gap-1 ${typeStyle.text}`}
+                            >
+                              <Icon className="h-3 w-3 shrink-0" />
+                              {typeStyle.label}
                             </p>
                           </div>
-
-                          {/* Description */}
-                          <div className="mt-1.5">
-                            <p className="text-[10px] text-gray-400 uppercase tracking-wider">
-                              Description
-                            </p>
-                            <p className="text-[11px] text-gray-600 mt-0.5 bg-gray-50 border border-gray-100 rounded-lg px-2 py-1.5">
-                              {obs.description}
-                            </p>
-                          </div>
-
-                          {/* Attachments — photos from camera or gallery */}
-                          {obs.attachments &&
-                            obs.attachments.length > 0 && (
-                              <div className="mt-1.5">
-                                <p className="text-[10px] text-gray-400 uppercase tracking-wider">
-                                  Attachments (
-                                  {obs.attachments.length})
-                                </p>
-                                <div className="mt-1 flex items-center gap-1.5 flex-wrap">
-                                  {obs.attachments.map(
-                                    (att) => (
-                                      <span
-                                        key={att.id}
-                                        className="inline-flex items-center gap-1 px-1.5 py-1 rounded-lg bg-gray-50 border border-gray-200 text-[10px] text-gray-600"
-                                      >
-                                        {att.source ===
-                                        "camera" ? (
-                                          <Camera className="h-3 w-3 text-gray-400" />
-                                        ) : (
-                                          <ImageIcon className="h-3 w-3 text-gray-400" />
-                                        )}
-                                        {att.name}
-                                      </span>
-                                    ),
-                                  )}
-                                </div>
-                              </div>
-                            )}
-
-                          <p className="text-[10px] text-gray-400 mt-1.5">
-                            Recorded {recorded.date}{" "}
-                            {recorded.time}
-                          </p>
                         </div>
+
+                        {/* Description */}
+                        <p className="text-[12px] text-gray-600 leading-relaxed mt-2 ml-[34px]">
+                          {obs.description}
+                        </p>
+
+                        {/* Attachments — photo thumbnails */}
+                        {obs.attachments &&
+                          obs.attachments.length > 0 && (
+                            <div className="mt-2.5 ml-[34px] flex items-start gap-2">
+                              {obs.attachments.map((att) => (
+                                <div
+                                  key={att.id}
+                                  className="w-14"
+                                >
+                                  <div className="w-14 h-14 rounded-lg bg-gradient-to-br from-gray-100 to-gray-200 border border-gray-200 flex items-center justify-center">
+                                    {att.source ===
+                                    "camera" ? (
+                                      <Camera className="h-4 w-4 text-gray-400" />
+                                    ) : (
+                                      <ImageIcon className="h-4 w-4 text-gray-400" />
+                                    )}
+                                  </div>
+                                  <p className="text-[9px] text-gray-400 truncate mt-0.5 text-center">
+                                    {att.name}
+                                  </p>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                      </div>
+
+                      {/* Footer — read-only GPS location + recorded time */}
+                      <div className="px-3 py-2 bg-gray-50/80 border-t border-gray-100 flex items-center justify-between gap-2">
+                        <span className="flex items-center gap-1 text-[10px] text-gray-500 min-w-0">
+                          <MapPin className="h-3 w-3 text-gray-400 shrink-0" />
+                          <span className="tabular-nums truncate">
+                            {formatGpsCoordinates(
+                              obs.latitude,
+                              obs.longitude,
+                            )}
+                          </span>
+                          <span className="px-1 py-px rounded bg-gray-200/80 text-[8px] font-semibold text-gray-500 tracking-wide shrink-0">
+                            GPS
+                          </span>
+                        </span>
+                        <span className="flex items-center gap-1 text-[10px] text-gray-400 shrink-0">
+                          <Clock className="h-3 w-3" />
+                          {recorded.date} · {recorded.time}
+                        </span>
                       </div>
                     </button>
                   );
