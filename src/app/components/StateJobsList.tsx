@@ -463,7 +463,7 @@ export default function StateJobsList({
         aria-label={`View details for ${job.state} pilot car job ${job.pilotJobId || job.id}`}
       >
         {/* Subtle emerald accent line */}
-        <div className="h-[3px] bg-gradient-to-r from-[#16A34A] to-[#4ADE80]" />
+        <div/>
 
         <div className="px-3 pt-3 pb-1">
           {/* Header row — job identity */}
