@@ -1,0 +1,47 @@
+                   </DrawerHeader>
+
+                   {/* Start/Stop Job Buttons for Assigned Jobs */}
+                   {activeJob?.status === 'Assigned' && (() => {
+                     const acceptedBid = activeJob.bids.find(bid => bid.status === 'Accepted');
+                     const jobStatus = (acceptedBid as any)?.jobStatus;
+                     const isActive = jobStatus === 'In Progress';
+                     
+                     return (
+                       <div className="px-4 pt-4">
+                         {!isActive ? (
+                           <Button 
+                             className="w-full bg-green-600 hover:bg-green-700 text-white h-12 font-semibold shadow-md"
+                             onClick={() => {
+                               // Update job status to In Progress
+                               if (acceptedBid) {
+                                 (acceptedBid as any).jobStatus = 'In Progress';
+                                 (acceptedBid as any).startTime = new Date().toISOString();
+                                 setActiveJob({...activeJob});
+                               }
+                             }}
+                           >
+                             <Timer className="w-5 h-5 mr-2" />
+                             Start Job
+                           </Button>
+                         ) : (
+                           <Button 
+                             variant="outline"
+                             className="w-full border-2 border-red-500 text-red-600 hover:bg-red-50 h-12 font-semibold"
+                             onClick={() => {
+                               // Update job status to Stopped
+                               if (acceptedBid) {
+                                 (acceptedBid as any).jobStatus = 'Not Started';
+                                 (acceptedBid as any).endTime = new Date().toISOString();
+                                 setActiveJob({...activeJob});
+                               }
+                             }}
+                           >
+                             <Timer className="w-5 h-5 mr-2" />
+                             Stop Job
+                           </Button>
+                         )}
+                       </div>
+                     );
+                   })()}
+
+                   <div className="flex-1 overflow-y-auto px-4 pb-4">

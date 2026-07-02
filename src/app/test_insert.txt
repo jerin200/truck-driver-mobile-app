@@ -1,0 +1,27 @@
+Test to insert:
+
+                            {/* Break and Waiting Time Tracking (for In Transit jobs) */}
+                            {activeJob?.status === 'In Transit' && (() => {
+                              const acceptedBid = activeJob.bids.find((bid: any) => bid.status === 'Accepted');
+                              const isJobActive = acceptedBid?.jobStatus === 'In Progress';
+                              
+                              if (!isJobActive) return null;
+                              
+                              return (
+                                <TimeTrackingSection
+                                  breakTimeActive={breakTimeActive}
+                                  setBreakTimeActive={setBreakTimeActive}
+                                  breakStartTime={breakStartTime}
+                                  setBreakStartTime={setBreakStartTime}
+                                  totalBreakTime={totalBreakTime}
+                                  setTotalBreakTime={setTotalBreakTime}
+                                  waitingTimeActive={waitingTimeActive}
+                                  setWaitingTimeActive={setWaitingTimeActive}
+                                  waitingStartTime={waitingStartTime}
+                                  setWaitingStartTime={setWaitingStartTime}
+                                  totalWaitingTime={totalWaitingTime}
+                                  setTotalWaitingTime={setTotalWaitingTime}
+                                />
+                              );
+                            })()}
+

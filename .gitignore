@@ -1,0 +1,11 @@
+node_modules/
+dist/
+
+# OS files
+.DS_Store
+
+# Local tool settings
+.claude/settings.local.json
+
+# Logs
+*.log

@@ -1,0 +1,35 @@
+                onClick={() => {
+                  const notes = (document.getElementById('change-notes') as HTMLTextAreaElement)?.value || '';
+                  if (changeType === 'route') {
+                    alert(
+                      `Route Change Request Submitted\n\n` +
+                      `From: ${permit.origin}\n` +
+                      `New Destination: ${newDestination}\n\n` +
+                      `Reason: ${routeChangeReason}\n` +
+                      `Notes: ${notes || 'None'}\n\n` +
+                      `NEXT STEP: Create a new permit request for the updated route.\n\n` +
+                      `Your dispatch team will:\n` +
+                      `• Review the route change\n` +
+                      `• Coordinate pilot car adjustments\n` +
+                      `• Contact you within 2-4 hours`
+                    );
+                  } else {
+                    alert(
+                      `Schedule Change Request Submitted\n\n` +
+                      `New Pickup Date: ${newPickupDate}\n` +
+                      `New Pickup Time: ${newPickupTime || 'Not specified'}\n\n` +
+                      `Reason: ${routeChangeReason}\n` +
+                      `Notes: ${notes || 'None'}\n\n` +
+                      `Your dispatch team will:\n` +
+                      `• Update permit effective dates\n` +
+                      `• Reschedule pilot car escorts\n` +
+                      `• Notify customer of changes\n` +
+                      `• Confirm new schedule within 1-2 hours`
+                    );
+                  }
+                  setRouteChangeOpen(false);
+                  setNewDestination('');
+                  setNewPickupDate('');
+                  setNewPickupTime('');
+                  setRouteChangeReason('');
+                }}
