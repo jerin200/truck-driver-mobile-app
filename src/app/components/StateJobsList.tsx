@@ -450,7 +450,7 @@ export default function StateJobsList({
 
     return (
       <div
-        className="bg-white rounded-2xl border border-[#BBF7D0] shadow-[0px_2px_6px_0px_rgba(22,163,74,0.08)] overflow-hidden cursor-pointer transition-all hover:shadow-md active:scale-[0.99]"
+        className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden cursor-pointer transition-all hover:shadow-md active:scale-[0.99]"
         onClick={() => onJobClick(job)}
         role="button"
         tabIndex={0}
@@ -522,7 +522,7 @@ export default function StateJobsList({
         </div>
 
         {/* Divider */}
-        <div className="mx-3 mt-3 border-t border-[#DCFCE7]" />
+        <div className="mx-3 mt-3 border-t border-gray-100" />
 
         {/* Actions */}
         <div className="px-3 py-2.5 grid grid-cols-2 gap-2">
