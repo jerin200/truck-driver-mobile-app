@@ -13,6 +13,8 @@ import {
   Calendar,
   Camera,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   Clock,
   Flag,
   Image as ImageIcon,
@@ -166,14 +168,25 @@ export default function RouteSurveyMapDrawer({
   const [selectedObsId, setSelectedObsId] = useState<
     string | null
   >(null);
+  const [expandedDescIds, setExpandedDescIds] = useState<
+    Record<string, boolean>
+  >({});
   const listItemRefs = useRef<
-    Record<string, HTMLButtonElement | null>
+    Record<string, HTMLDivElement | null>
   >({});
 
   // Reset selection whenever a different job's survey is opened
   useEffect(() => {
     setSelectedObsId(null);
+    setExpandedDescIds({});
   }, [job?.id, open]);
+
+  const toggleDescription = (obsId: string) => {
+    setExpandedDescIds((prev) => ({
+      ...prev,
+      [obsId]: !prev[obsId],
+    }));
+  };
 
   if (!job?.routeSurvey) return null;
 
@@ -372,13 +385,21 @@ export default function RouteSurveyMapDrawer({
                   );
                   const isSelected = selectedObsId === obs.id;
                   return (
-                    <button
+                    <div
                       key={obs.id}
                       ref={(el) => {
                         listItemRefs.current[obs.id] = el;
                       }}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => setSelectedObsId(obs.id)}
-                      className={`w-full text-left bg-white rounded-xl border overflow-hidden transition-colors ${
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setSelectedObsId(obs.id);
+                        }
+                      }}
+                      className={`w-full text-left bg-white rounded-xl border overflow-hidden transition-colors cursor-pointer ${
                         isSelected
                           ? "border-[#16A34A] ring-1 ring-[#BBF7D0]"
                           : "border-gray-200 hover:bg-gray-50"
@@ -405,10 +426,58 @@ export default function RouteSurveyMapDrawer({
                           </div>
                         </div>
 
-                        {/* Description */}
-                        <p className="text-[12px] text-gray-600 leading-relaxed mt-2 ml-[34px]">
-                          {obs.description}
-                        </p>
+                        {/* Description — boxed, clamped with see more/less toggle */}
+                        {(() => {
+                          const isExpanded =
+                            !!expandedDescIds[obs.id];
+                          const isLong =
+                            obs.description.length > 90;
+                          return (
+                            <div className="mt-2 ml-[34px] rounded-lg bg-gray-50 border border-gray-100 px-2.5 py-2">
+                              <p
+                                className={`text-[12px] text-gray-600 leading-relaxed ${
+                                  isLong && !isExpanded
+                                    ? "line-clamp-2"
+                                    : ""
+                                }`}
+                              >
+                                {obs.description}
+                              </p>
+                              {isLong && (
+                                <span
+                                  role="button"
+                                  tabIndex={0}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    toggleDescription(obs.id);
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (
+                                      e.key === "Enter" ||
+                                      e.key === " "
+                                    ) {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      toggleDescription(
+                                        obs.id,
+                                      );
+                                    }
+                                  }}
+                                  className="mt-1 inline-flex items-center gap-0.5 text-[11px] font-medium text-blue-600 hover:text-blue-700"
+                                >
+                                  {isExpanded
+                                    ? "See less"
+                                    : "See more"}
+                                  {isExpanded ? (
+                                    <ChevronUp className="h-3 w-3" />
+                                  ) : (
+                                    <ChevronDown className="h-3 w-3" />
+                                  )}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
 
                         {/* Attachments — photo thumbnails */}
                         {obs.attachments &&
@@ -455,7 +524,7 @@ export default function RouteSurveyMapDrawer({
                           {recorded.date} · {recorded.time}
                         </span>
                       </div>
-                    </button>
+                    </div>
                   );
                 })}
               </div>
