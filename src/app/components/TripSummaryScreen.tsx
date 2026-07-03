@@ -243,8 +243,8 @@ export default function TripSummaryScreen({
         )}
 
         {/* ── Hero completion card ── */}
-        <div className="mx-4 mt-4 bg-white rounded-2xl border border-[#BBF7D0] shadow-[0px_1px_4px_0px_rgba(22,163,74,0.10)] overflow-hidden">
-          <div className="h-1.5 bg-gradient-to-r from-[#16A34A] to-[#4ADE80]" />
+        <div className="mx-4 mt-4 bg-white rounded-2xl shadow-[0px_1px_4px_0px_rgba(22,163,74,0.10)] overflow-hidden">
+          <div />
           <div className="p-5">
             <div className="flex items-center gap-3 mb-4">
               <div className="w-11 h-11 rounded-xl bg-[#F0FDF4] flex items-center justify-center shrink-0">

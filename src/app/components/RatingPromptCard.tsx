@@ -15,9 +15,9 @@ export function RatingPromptCard({
   onDismiss,
 }: RatingPromptCardProps) {
   return (
-    <div className="mx-4 mt-4 bg-white rounded-2xl border border-[#FED7AA] shadow-[0px_2px_8px_0px_rgba(248,152,35,0.12)] overflow-hidden">
+    <div className="mx-4 mt-4 bg-white rounded-2xl shadow-[0px_1px_4px_0px_rgba(22,163,74,0.10)] overflow-hidden">
       {/* Top amber accent bar */}
-      <div className="h-1 bg-gradient-to-r from-[#F89823] to-[#FBBF24]" />
+      <div />
 
       <div className="px-4 pt-4 pb-4">
         <div className="flex items-start gap-3">

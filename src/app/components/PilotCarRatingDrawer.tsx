@@ -197,30 +197,6 @@ export function PilotCarRatingDrawer({
               </div>
 
               {/* Comments Section */}
-              <div className="mt-6 pt-4 border-t border-gray-100">
-                <Label
-                  htmlFor="comments"
-                  className="text-sm font-normal text-gray-700 mb-2 block"
-                >
-                  Comments (Optional)
-                </Label>
-                <Textarea
-                  id="comments"
-                  placeholder="Add comments..."
-                  value={comments}
-                  onChange={(e) => {
-                    if (e.target.value.length <= 250) {
-                      setComments(e.target.value);
-                    }
-                  }}
-                  rows={3}
-                  maxLength={250}
-                  className="resize-none text-sm"
-                />
-                <p className="text-xs text-gray-400 mt-1">
-                  {comments.length}/250 characters
-                </p>
-              </div>
             </div>
 
             {/* Footer */}
@@ -257,7 +233,7 @@ export function PilotCarRatingDrawer({
             <p className="text-sm text-gray-600">
               Your rating has been submitted successfully
             </p>
-            <div className="mt-4">
+            <div className="mt-4 flex justify-center">
               <StarRating
                 value={overallRating}
                 readonly
