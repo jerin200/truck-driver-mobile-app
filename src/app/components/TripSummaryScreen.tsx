@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { CheckCircle2, ArrowRight, Clock, Truck, Users, FileText, Navigation, ChevronLeft, Star, Package, Timer } from 'lucide-react';
+import { CheckCircle2, ArrowRight, Clock, Truck, Users, FileText, Navigation, ChevronLeft, Star, Package, Timer, Receipt, ChevronRight } from 'lucide-react';
 import { RatingPromptCard } from './RatingPromptCard';
 import { PilotCarRatingDrawer } from './PilotCarRatingDrawer';
 import type { SubmittedRating } from './PilotCarRatingDrawer';
+import InvoicePaymentFlow, { InvoiceModel } from './InvoicePaymentFlow';
 
 // ---- Shared types (mirrored from ManageTrips) ----
 
@@ -121,6 +122,7 @@ export default function TripSummaryScreen({
   const [ratingSubmitted, setRatingSubmitted] = useState(false);
   const [ratingDismissed, setRatingDismissed] = useState(false);
   const [ratingDrawerOpen, setRatingDrawerOpen] = useState(false);
+  const [invoiceFlowOpen, setInvoiceFlowOpen] = useState(false);
 
   const tripJobs = jobs.filter(j => j.tripId === trip.requestId);
 
@@ -170,6 +172,25 @@ export default function TripSummaryScreen({
     setRatingSubmitted(true);
     onRatingSubmitted?.(rating);
   };
+
+  // Invoice submitted by the escorting pilot company for this completed trip.
+  const invoice: InvoiceModel = {
+    pilotCompany: primaryPilotCar?.company ?? 'ABC Pilot Services',
+    invoiceNumber: `INV-${trip.requestId.replace(/[^0-9]/g, '') || '2026'}-04812`,
+    tripId: trip.requestId,
+    submittedDate: fmt24(endedAt).split(' ')[0],
+    currency: 'CAD',
+    charges: { baseEscort: 4500, standby: 35, layover: 400, routeChange: 150 },
+    platformFeeRate: 0.145,
+    taxRate: 0.05,
+    paymentMethod: { brand: 'Visa', last4: '4242', expiry: '08/28' },
+  };
+  const invoiceTotal = 6076.58;
+
+  // The invoice review → payment flow lives inside the end-of-trip experience.
+  if (invoiceFlowOpen) {
+    return <InvoicePaymentFlow invoice={invoice} onClose={() => setInvoiceFlowOpen(false)} />;
+  }
 
   return (
     <div className="flex flex-col h-full bg-[#f6f6f6] w-full overflow-hidden">
@@ -462,15 +483,54 @@ export default function TripSummaryScreen({
           </div>
         </div>
 
-        {/* ── Invoice notice ── */}
-        <div className="mx-4 mt-3 bg-[#FFF8F0] border border-[#FED7AA] rounded-xl px-4 py-3.5 flex items-start gap-3">
-          <FileText className="w-4 h-4 text-[#D97706] shrink-0 mt-0.5" />
-          <div>
-            <p className="text-sm font-semibold text-[#92400E]">Invoice Generation</p>
-            <p className="text-xs text-[#B45309] mt-0.5 leading-relaxed">
-              Pilot car companies are now eligible to generate invoices for services rendered on this trip. You do not need to take any action.
-            </p>
+        {/* ── Invoice — action required ── */}
+        <div className="mx-4 mt-3">
+          <div className="flex items-center justify-between mb-2.5">
+            <span className="text-sm font-semibold text-[#0a0a0a]">Invoice</span>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#FFF7ED] text-[#C2410C] border border-[#FED7AA] text-[11px] font-semibold">
+              <span className="w-1.5 h-1.5 rounded-full bg-current opacity-70" />
+              Pending Review
+            </span>
           </div>
+
+          <button
+            onClick={() => setInvoiceFlowOpen(true)}
+            className="w-full text-left bg-white rounded-2xl border border-[#FCE3C4] shadow-[0px_1px_4px_0px_rgba(217,119,6,0.10)] overflow-hidden active:scale-[0.99] transition-transform"
+          >
+            <div className="h-1.5 bg-gradient-to-r from-[#F89823] to-[#F5761F]" />
+            <div className="px-4 py-4">
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-xl bg-[#FFF3E0] flex items-center justify-center shrink-0">
+                  <Receipt className="w-5 h-5 text-[#D97706]" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-[#0a0a0a] truncate">Invoice received</p>
+                  <p className="text-xs text-gray-500 mt-0.5 truncate">
+                    {invoice.pilotCompany} · {invoice.invoiceNumber}
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-gray-300 shrink-0" />
+              </div>
+
+              <div className="mt-3 pt-3 border-t border-gray-100 flex items-end justify-between">
+                <div>
+                  <p className="text-[11px] text-gray-400 uppercase tracking-wide">Total Payable</p>
+                  <p className="text-[20px] font-bold text-[#0a0a0a] tabular-nums leading-tight">
+                    ${invoiceTotal.toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    <span className="text-[12px] font-medium text-gray-400 ml-1">{invoice.currency}</span>
+                  </p>
+                </div>
+                <span className="inline-flex items-center gap-1.5 h-9 px-4 rounded-xl bg-[#F89823] text-[#1a1a1a] text-[13px] font-semibold shadow-[0px_2px_8px_0px_rgba(248,152,35,0.25)]">
+                  Review Invoice
+                  <ArrowRight className="w-4 h-4" />
+                </span>
+              </div>
+            </div>
+          </button>
+
+          <p className="text-[11px] text-gray-400 leading-relaxed mt-2 px-1">
+            Review the pilot company's charges, then pay or raise a dispute. Platform fees and taxes are shown before payment.
+          </p>
         </div>
 
       </div>
