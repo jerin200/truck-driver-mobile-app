@@ -20,7 +20,6 @@ import {
   X,
   Download,
   Info,
-  Truck,
   Sparkles,
 } from 'lucide-react';
 import { Button } from './ui/button';
@@ -65,9 +64,16 @@ export interface InvoiceModel {
   paymentMethod: { brand: string; last4: string; expiry: string };
 }
 
+/** Outcome reported back to the caller when the flow is dismissed. */
+export type InvoiceOutcome = 'paid' | 'disputed';
+
 export interface InvoicePaymentFlowProps {
-  /** Return to the Trips list. */
-  onClose?: () => void;
+  /**
+   * Return to the Trips list. Receives the resolved outcome when the user
+   * leaves after paying or submitting a dispute; called with no argument when
+   * the flow is simply cancelled.
+   */
+  onClose?: (outcome?: InvoiceOutcome) => void;
   /** Which screen to open on. Handy for previewing individual states. */
   initialScreen?: Screen;
   invoice?: InvoiceModel;
@@ -443,19 +449,7 @@ export default function InvoicePaymentFlow({
         footer={<PrimaryButton onClick={() => setScreen('review')}>Review Invoice</PrimaryButton>}
       >
         <div className="px-4 pt-5 pb-6 space-y-4">
-          {/* Notification banner */}
-          <div className="flex items-start gap-3 bg-[#FFF8F0] border border-[#FED7AA] rounded-2xl px-4 py-3.5">
-            <div className="w-9 h-9 rounded-xl bg-white border border-[#FED7AA] flex items-center justify-center shrink-0">
-              <Receipt className="w-5 h-5 text-[#D97706]" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-[13px] font-semibold text-[#92400E]">New invoice submitted</p>
-              <p className="text-[12px] text-[#B45309] mt-0.5 leading-relaxed">
-                {invoice.pilotCompany} submitted an invoice for your completed escort. Review the
-                charges before making payment.
-              </p>
-            </div>
-          </div>
+
 
           {/* Details card */}
           <div className={CARD}>
@@ -466,10 +460,10 @@ export default function InvoicePaymentFlow({
               right={<StatusChip tone="pending" label="Pending Review" />}
             />
             <div className="px-4 py-1 divide-y divide-gray-100">
-              <DetailRow icon={Building2} label="Pilot Company" value={invoice.pilotCompany} />
-              <DetailRow icon={Hash} label="Invoice Number" value={invoice.invoiceNumber} mono />
-              <DetailRow icon={Truck} label="Trip ID" value={invoice.tripId} mono />
-              <DetailRow icon={CalendarDays} label="Submitted" value={invoice.submittedDate} />
+              <DetailRow label="Pilot Company" value={invoice.pilotCompany} />
+              <DetailRow label="Invoice Number" value={invoice.invoiceNumber} mono />
+              <DetailRow label="Trip ID" value={invoice.tripId} mono />
+              <DetailRow label="Submitted" value={invoice.submittedDate} />
             </div>
           </div>
 
@@ -727,7 +721,7 @@ export default function InvoicePaymentFlow({
             <Download className="w-4 h-4 mr-1.5" />
             View Receipt
           </SecondaryButton>
-          <PrimaryButton onClick={onClose}>Back to Trips</PrimaryButton>
+          <PrimaryButton onClick={() => onClose('paid')}>Back to Trips</PrimaryButton>
         </div>
       </div>
     );
@@ -885,7 +879,7 @@ export default function InvoicePaymentFlow({
         </div>
 
         <div className="flex-none bg-white border-t border-[#e6e3df] px-4 py-3 safe-area-inset-bottom">
-          <PrimaryButton onClick={onClose}>Back to Trip</PrimaryButton>
+          <PrimaryButton onClick={() => onClose('disputed')}>Back to Trip</PrimaryButton>
         </div>
       </div>
     );
@@ -1021,7 +1015,7 @@ function DetailRow({
   value,
   mono,
 }: {
-  icon: React.ComponentType<{ className?: string }>;
+  icon?: React.ComponentType<{ className?: string }>;
   label: string;
   value: string;
   mono?: boolean;
@@ -1029,7 +1023,7 @@ function DetailRow({
   return (
     <div className="flex items-center justify-between py-3">
       <span className="flex items-center gap-2 text-[13px] text-[#4a5565]">
-        <Icon className="w-4 h-4 text-[#9ca3af]" />
+        {Icon && <Icon className="w-4 h-4 text-[#9ca3af]" />}
         {label}
       </span>
       <span className={`text-[13px] font-semibold text-[#101828] ${mono ? 'tabular-nums' : ''}`}>{value}</span>
