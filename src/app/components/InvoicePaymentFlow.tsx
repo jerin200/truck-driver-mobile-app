@@ -3,8 +3,6 @@ import {
   ChevronLeft,
   ChevronRight,
   Receipt,
-  BellRing,
-  Building2,
   Hash,
   CalendarDays,
   ShieldCheck,
@@ -21,6 +19,7 @@ import {
   Download,
   Info,
   Sparkles,
+  Plus,
 } from 'lucide-react';
 import { Button } from './ui/button';
 
@@ -39,7 +38,6 @@ const ORANGE = '#F89823';
 const ORANGE_HOVER = '#e8880d';
 
 type Screen =
-  | 'received'
   | 'review'
   | 'confirm'
   | 'success'
@@ -99,6 +97,15 @@ const DEFAULT_INVOICE: InvoiceModel = {
 // ── helpers ──
 const money = (n: number) =>
   n.toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+/** A driver-added line item. `value` is raw input text, parsed to a number for math. */
+type CustomCharge = { id: string; label: string; value: string };
+
+let idSeq = 0;
+const newId = () =>
+  typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `cc-${Date.now()}-${idSeq++}`;
 
 // ============================================================
 // Small shared primitives
@@ -375,7 +382,7 @@ function Timeline({ steps }: { steps: { label: string; state: TLState; note?: st
 
 export default function InvoicePaymentFlow({
   onClose = () => {},
-  initialScreen = 'received',
+  initialScreen = 'review',
   invoice = DEFAULT_INVOICE,
 }: InvoicePaymentFlowProps) {
   const [screen, setScreen] = useState<Screen>(initialScreen);
@@ -389,17 +396,29 @@ export default function InvoicePaymentFlow({
   // Decision preview toggle + payable amount carried into confirm/success
   const [decision, setDecision] = useState<'approved' | 'updated'>('updated');
 
+  // Custom charges the driver can add to the invoice on the Review screen.
+  // `value` is kept as raw text so the input stays controllable; parsed for math.
+  const [customCharges, setCustomCharges] = useState<CustomCharge[]>([]);
+
+  const addCustomCharge = () =>
+    setCustomCharges((c) => [...c, { id: newId(), label: '', value: '' }]);
+  const updateCustomCharge = (id: string, patch: Partial<Omit<CustomCharge, 'id'>>) =>
+    setCustomCharges((c) => c.map((x) => (x.id === id ? { ...x, ...patch } : x)));
+  const removeCustomCharge = (id: string) =>
+    setCustomCharges((c) => c.filter((x) => x.id !== id));
+
   // ── Money math ──
   const m = useMemo(() => {
     const { baseEscort, standby, layover, routeChange } = invoice.charges;
-    const pilotTotal = baseEscort + standby + layover + routeChange;
+    const customTotal = customCharges.reduce((s, x) => s + (parseFloat(x.value) || 0), 0);
+    const pilotTotal = baseEscort + standby + layover + routeChange + customTotal;
     const round2 = (n: number) => Math.round(n * 100) / 100;
     const platformFee = round2(pilotTotal * invoice.platformFeeRate);
     const tax = round2(pilotTotal * invoice.taxRate);
     const overwize = round2(platformFee + tax);
     const total = round2(pilotTotal + overwize);
-    return { pilotTotal, platformFee, tax, overwize, total };
-  }, [invoice]);
+    return { pilotTotal, customTotal, platformFee, tax, overwize, total };
+  }, [invoice, customCharges]);
 
   // Updated-decision figures (Super Admin reduced pilot standby/route charges).
   const updatedTotal = 5826.58;
@@ -433,70 +452,14 @@ export default function InvoicePaymentFlow({
   };
 
   // ==========================================================
-  // SCREEN 1 · Invoice Received
-  // ==========================================================
-  if (screen === 'received') {
-    return (
-      <Scaffold
-        title="Invoice Received"
-        onBack={onClose}
-        right={
-          <span className="relative">
-            <BellRing className="w-5 h-5 text-[#6b7280]" />
-            <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-[#F89823] ring-2 ring-white" />
-          </span>
-        }
-        footer={<PrimaryButton onClick={() => setScreen('review')}>Review Invoice</PrimaryButton>}
-      >
-        <div className="px-4 pt-5 pb-6 space-y-4">
-
-
-          {/* Details card */}
-          <div className={CARD}>
-            <CardHeader
-              icon={(p) => <Building2 {...p} className="w-4 h-4 text-[#2563EB]" />}
-              title="Invoice Details"
-              tint="#EFF6FF"
-              right={<StatusChip tone="pending" label="Pending Review" />}
-            />
-            <div className="px-4 py-1 divide-y divide-gray-100">
-              <DetailRow label="Pilot Company" value={invoice.pilotCompany} />
-              <DetailRow label="Invoice Number" value={invoice.invoiceNumber} mono />
-              <DetailRow label="Trip ID" value={invoice.tripId} mono />
-              <DetailRow label="Submitted" value={invoice.submittedDate} />
-            </div>
-          </div>
-
-          {/* Amount highlight */}
-          <div className="rounded-2xl overflow-hidden shadow-[0px_8px_24px_-8px_rgba(248,152,35,0.45)]">
-            <div className="bg-gradient-to-br from-[#F89823] to-[#F5761F] px-5 py-6 text-center">
-              <p className="text-[12px] font-semibold text-[#7a3c00] uppercase tracking-wider">
-                Invoice Amount
-              </p>
-              <p className="mt-1.5 text-[38px] leading-none font-bold text-[#1a1a1a] tabular-nums">
-                ${money(invoice.charges.baseEscort + invoice.charges.standby + invoice.charges.layover + invoice.charges.routeChange)}
-              </p>
-              <p className="text-[13px] font-semibold text-[#7a3c00] mt-1.5">{c} · Pilot company invoice</p>
-            </div>
-          </div>
-
-          <p className="text-[11px] text-[#9ca3af] text-center leading-relaxed px-4">
-            Platform fees and taxes are calculated on the next screen and shown before you pay.
-          </p>
-        </div>
-      </Scaffold>
-    );
-  }
-
-  // ==========================================================
-  // SCREEN 2 · Review Invoice
+  // SCREEN 1 · Review Invoice
   // ==========================================================
   if (screen === 'review') {
     return (
       <Scaffold
         title="Review Invoice"
         subtitle={`${invoice.invoiceNumber} · ${invoice.pilotCompany}`}
-        onBack={() => setScreen('received')}
+        onBack={onClose}
         footer={
           <div className="flex gap-3">
             <div className="flex-1">
@@ -529,6 +492,29 @@ export default function InvoicePaymentFlow({
               <Row label="Layover Charges" amount={invoice.charges.layover} />
               <div className="border-t border-gray-100" />
               <Row label="Route Change Charges" amount={invoice.charges.routeChange} />
+
+              {customCharges.map((cc) => (
+                <div key={cc.id}>
+                  <div className="border-t border-gray-100" />
+                  <CustomChargeRow
+                    charge={cc}
+                    currency={c}
+                    onChange={(patch) => updateCustomCharge(cc.id, patch)}
+                    onRemove={() => removeCustomCharge(cc.id)}
+                  />
+                </div>
+              ))}
+
+              <div className="border-t border-gray-100" />
+              <button
+                onClick={addCustomCharge}
+                className="flex items-center gap-1.5 py-2.5 text-[13px] font-semibold text-[#F89823] hover:text-[#e8880d] active:scale-[0.98] transition-all"
+              >
+                <span className="w-5 h-5 rounded-full bg-[#FFF3E0] flex items-center justify-center">
+                  <Plus className="w-3.5 h-3.5" />
+                </span>
+                Add custom charge
+              </button>
             </div>
             <div className="mx-4 my-1 border-t-2 border-dashed border-gray-200" />
             <div className="px-4 pb-3 pt-1">
@@ -1027,6 +1013,48 @@ function DetailRow({
         {label}
       </span>
       <span className={`text-[13px] font-semibold text-[#101828] ${mono ? 'tabular-nums' : ''}`}>{value}</span>
+    </div>
+  );
+}
+
+function CustomChargeRow({
+  charge,
+  currency,
+  onChange,
+  onRemove,
+}: {
+  charge: CustomCharge;
+  currency?: string;
+  onChange: (patch: Partial<Omit<CustomCharge, 'id'>>) => void;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 py-2">
+      <input
+        value={charge.label}
+        onChange={(e) => onChange({ label: e.target.value })}
+        placeholder="Charge description"
+        maxLength={40}
+        className="flex-1 min-w-0 bg-transparent text-[13px] text-[#101828] placeholder:text-[#9ca3af] focus:outline-none"
+      />
+      <div className="flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 px-2 py-1 shrink-0 focus-within:border-[#F89823] focus-within:ring-2 focus-within:ring-[#F89823]/30 transition-all">
+        <span className="text-[13px] text-[#9ca3af]">$</span>
+        <input
+          inputMode="decimal"
+          value={charge.value}
+          onChange={(e) => onChange({ value: e.target.value.replace(/[^0-9.]/g, '') })}
+          placeholder="0.00"
+          className="w-16 bg-transparent text-right text-[13px] font-semibold text-[#101828] tabular-nums placeholder:text-[#9ca3af] focus:outline-none"
+        />
+        {currency ? <span className="text-[10px] font-medium text-[#9ca3af]">{currency}</span> : null}
+      </div>
+      <button
+        onClick={onRemove}
+        aria-label="Remove charge"
+        className="w-7 h-7 rounded-full flex items-center justify-center text-[#9ca3af] hover:bg-[#FFF1F2] hover:text-[#E11D48] active:scale-95 transition-all shrink-0"
+      >
+        <X className="w-4 h-4" />
+      </button>
     </div>
   );
 }

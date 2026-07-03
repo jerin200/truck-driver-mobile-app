@@ -198,7 +198,7 @@ export default function TripSummaryScreen({
             ? 'success'
             : invoiceStatus === 'disputed'
             ? 'disputeSubmitted'
-            : 'received'
+            : 'review'
         }
         onClose={(outcome) => {
           if (outcome) setInvoiceStatus(outcome);
@@ -257,6 +257,92 @@ export default function TripSummaryScreen({
             </div>
           </div>
         )}
+
+        {/* ── Invoice — status-aware ── */}
+        <div className="mx-4 mt-4">
+          <div className="flex items-center justify-between mb-2.5">
+            <span className="text-sm font-semibold text-[#0a0a0a]">Invoice</span>
+           
+          </div>
+
+          <button
+            onClick={() => setInvoiceFlowOpen(true)}
+            className="w-full text-left bg-white rounded-2xl shadow-[0px_1px_4px_0px_rgba(22,163,74,0.10)] overflow-hidden active:scale-[0.99] transition-transform"
+          >
+            <div className="px-4 py-4">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
+                    invoiceStatus === 'paid'
+                      ? 'bg-[#F0FDF4]'
+                      : invoiceStatus === 'disputed'
+                      ? 'bg-[#FFF1F2]'
+                      : 'bg-[#FFF3E0]'
+                  }`}
+                >
+                  {invoiceStatus === 'paid' ? (
+                    <CheckCircle2 className="w-5 h-5 text-[#16A34A]" />
+                  ) : invoiceStatus === 'disputed' ? (
+                    <AlertTriangle className="w-5 h-5 text-[#E11D48]" />
+                  ) : (
+                    <Receipt className="w-5 h-5 text-[#D97706]" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-[#0a0a0a] truncate">
+                    {invoiceStatus === 'paid'
+                      ? 'Invoice paid'
+                      : invoiceStatus === 'disputed'
+                      ? 'Dispute submitted'
+                      : 'Invoice received'}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5 truncate">
+                    {invoice.pilotCompany} · {invoice.invoiceNumber}
+                  </p>
+                </div>
+                <ChevronRight className="w-5 h-5 text-gray-300 shrink-0" />
+              </div>
+
+              <div className="mt-3 pt-3 border-t border-gray-100 flex items-end justify-between">
+                <div>
+                  <p className="text-[11px] text-gray-400 uppercase tracking-wide">
+                    {invoiceStatus === 'paid' ? 'Amount Paid' : 'Total Payable'}
+                  </p>
+                  <p
+                    className={`text-[20px] font-bold tabular-nums leading-tight ${
+                      invoiceStatus === 'paid' ? 'text-[#16A34A]' : 'text-[#0a0a0a]'
+                    }`}
+                  >
+                    ${invoiceTotal.toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    <span className="text-[12px] font-medium text-gray-400 ml-1">{invoice.currency}</span>
+                  </p>
+                </div>
+                <span
+                  className={`inline-flex items-center gap-1.5 h-9 px-4 rounded-sm text-[13px] font-semibold ${
+                    invoiceStatus === 'pending'
+                      ? 'bg-[#F89823] text-[#1a1a1a] shadow-[0px_2px_8px_0px_rgba(248,152,35,0.25)]'
+                      : 'bg-gray-100 text-[#374151]'
+                  }`}
+                >
+                  {invoiceStatus === 'paid'
+                    ? 'View Receipt'
+                    : invoiceStatus === 'disputed'
+                    ? 'View Dispute'
+                    : 'Generate Invoice'}
+                  <ArrowRight className="w-4 h-4" />
+                </span>
+              </div>
+            </div>
+          </button>
+
+          <p className="text-[11px] text-gray-400 leading-relaxed mt-2 px-1">
+            {invoiceStatus === 'paid'
+              ? 'Payment complete. Funds are released to the pilot company once the transaction settles.'
+              : invoiceStatus === 'disputed'
+              ? 'Dispute submitted. The invoice is on hold while Super Admin reviews it.'
+              : "Review the pilot company's charges, then pay or raise a dispute. Platform fees and taxes are shown before payment."}
+          </p>
+        </div>
 
         {/* ── Hero completion card ── */}
         <div className="mx-4 mt-4 bg-white rounded-2xl shadow-[0px_1px_4px_0px_rgba(22,163,74,0.10)] overflow-hidden">
@@ -497,107 +583,6 @@ export default function TripSummaryScreen({
               <p className="text-xs text-gray-500 mt-0.5">This trip completed without any recorded incidents.</p>
             </div>
           </div>
-        </div>
-
-        {/* ── Invoice — status-aware ── */}
-        <div className="mx-4 mt-3">
-          <div className="flex items-center justify-between mb-2.5">
-            <span className="text-sm font-semibold text-[#0a0a0a]">Invoice</span>
-            {invoiceStatus === 'paid' ? (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#F0FDF4] text-[#16A34A] border border-[#BBF7D0] text-[11px] font-semibold">
-                <span className="w-1.5 h-1.5 rounded-full bg-current opacity-70" />
-                Paid
-              </span>
-            ) : invoiceStatus === 'disputed' ? (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#FFF1F2] text-[#E11D48] border border-[#FECDD3] text-[11px] font-semibold">
-                <span className="w-1.5 h-1.5 rounded-full bg-current opacity-70" />
-                Disputed
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#FFF7ED] text-[#C2410C] border border-[#FED7AA] text-[11px] font-semibold">
-                <span className="w-1.5 h-1.5 rounded-full bg-current opacity-70" />
-                Pending Review
-              </span>
-            )}
-          </div>
-
-          <button
-            onClick={() => setInvoiceFlowOpen(true)}
-            className="w-full text-left bg-white rounded-2xl shadow-[0px_1px_4px_0px_rgba(22,163,74,0.10)] overflow-hidden active:scale-[0.99] transition-transform"
-          >
-            <div className="px-4 py-4">
-              <div className="flex items-center gap-3">
-                <div
-                  className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
-                    invoiceStatus === 'paid'
-                      ? 'bg-[#F0FDF4]'
-                      : invoiceStatus === 'disputed'
-                      ? 'bg-[#FFF1F2]'
-                      : 'bg-[#FFF3E0]'
-                  }`}
-                >
-                  {invoiceStatus === 'paid' ? (
-                    <CheckCircle2 className="w-5 h-5 text-[#16A34A]" />
-                  ) : invoiceStatus === 'disputed' ? (
-                    <AlertTriangle className="w-5 h-5 text-[#E11D48]" />
-                  ) : (
-                    <Receipt className="w-5 h-5 text-[#D97706]" />
-                  )}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-[#0a0a0a] truncate">
-                    {invoiceStatus === 'paid'
-                      ? 'Invoice paid'
-                      : invoiceStatus === 'disputed'
-                      ? 'Dispute submitted'
-                      : 'Invoice received'}
-                  </p>
-                  <p className="text-xs text-gray-500 mt-0.5 truncate">
-                    {invoice.pilotCompany} · {invoice.invoiceNumber}
-                  </p>
-                </div>
-                <ChevronRight className="w-5 h-5 text-gray-300 shrink-0" />
-              </div>
-
-              <div className="mt-3 pt-3 border-t border-gray-100 flex items-end justify-between">
-                <div>
-                  <p className="text-[11px] text-gray-400 uppercase tracking-wide">
-                    {invoiceStatus === 'paid' ? 'Amount Paid' : 'Total Payable'}
-                  </p>
-                  <p
-                    className={`text-[20px] font-bold tabular-nums leading-tight ${
-                      invoiceStatus === 'paid' ? 'text-[#16A34A]' : 'text-[#0a0a0a]'
-                    }`}
-                  >
-                    ${invoiceTotal.toLocaleString('en-CA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    <span className="text-[12px] font-medium text-gray-400 ml-1">{invoice.currency}</span>
-                  </p>
-                </div>
-                <span
-                  className={`inline-flex items-center gap-1.5 h-9 px-4 rounded-sm text-[13px] font-semibold ${
-                    invoiceStatus === 'pending'
-                      ? 'bg-[#F89823] text-[#1a1a1a] shadow-[0px_2px_8px_0px_rgba(248,152,35,0.25)]'
-                      : 'bg-gray-100 text-[#374151]'
-                  }`}
-                >
-                  {invoiceStatus === 'paid'
-                    ? 'View Receipt'
-                    : invoiceStatus === 'disputed'
-                    ? 'View Dispute'
-                    : 'Review Invoice'}
-                  <ArrowRight className="w-4 h-4" />
-                </span>
-              </div>
-            </div>
-          </button>
-
-          <p className="text-[11px] text-gray-400 leading-relaxed mt-2 px-1">
-            {invoiceStatus === 'paid'
-              ? 'Payment complete. Funds are released to the pilot company once the transaction settles.'
-              : invoiceStatus === 'disputed'
-              ? 'Dispute submitted. The invoice is on hold while Super Admin reviews it.'
-              : "Review the pilot company's charges, then pay or raise a dispute. Platform fees and taxes are shown before payment."}
-          </p>
         </div>
 
       </div>
