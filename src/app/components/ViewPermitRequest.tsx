@@ -3392,9 +3392,12 @@ export default function ViewPermitRequest({
         onBack={() => setShowPostJobPage(false)}
         onSave={(data) => {
           console.log("Job saved:", data);
-          alert(
-            "Job posted successfully!\n\nIn a real application, this would create a new pilot car job posting.",
-          );
+          const allocation = data?.allocation;
+          const message =
+            allocation?.mode === "group"
+              ? `Job posted to ${allocation.groupName}`
+              : "Job posted to all qualified pilot cars";
+          showSnackbar(message, "success");
           setShowPostJobPage(false);
         }}
         loadInfo={{

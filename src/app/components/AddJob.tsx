@@ -21,7 +21,6 @@ import {
   Route,
   Car
 } from 'lucide-react';
-import { useSnackbar } from '../contexts/SnackbarContext';
 import RouteMapSelector from './RouteMapSelector';
 
 interface AddJobProps {
@@ -77,7 +76,6 @@ const AVAILABLE_STATES = [
 ];
 
 export default function AddJob({ onClose, onSave, tripData }: AddJobProps) {
-  const { showSnackbar } = useSnackbar();
   const [step, setStep] = useState<1 | 2>(1);
   
   // Step 1 State
@@ -176,9 +174,9 @@ export default function AddJob({ onClose, onSave, tripData }: AddJobProps) {
       selectedStates,
       stateConfigs,
     };
+    // Hand off to the parent, which drives the next step (pilot car allocation).
+    // The parent is responsible for navigation and the final "posted" confirmation.
     onSave?.(data);
-    onClose();
-    showSnackbar('Job posted successfully!', 'success');
   };
 
   // Check if a single state has its required fields filled

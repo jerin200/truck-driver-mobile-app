@@ -1,6 +1,6 @@
 import { useState } from "react";
 import AddJob from "./AddJob";
-import ListPilotCarsPage from "./ListPilotCarsPage";
+import PilotCarAllocation, { AllocationResult } from "./PilotCarAllocation";
 import type { LoadInfo } from "./CreateTripPage";
 
 interface PostJobPageProps {
@@ -13,6 +13,8 @@ interface PostJobPageProps {
   routeStartDate?: string;
   routeStates?: string[];
   tripPermits?: Array<{ id: string; name: string; state: string }>;
+  /** Role-based access — user must be able to create & post jobs. Defaults to true. */
+  canPostJobs?: boolean;
 }
 
 export default function PostJobPage({
@@ -24,43 +26,43 @@ export default function PostJobPage({
   routeDestination,
   routeStates = [],
   tripPermits = [],
+  canPostJobs = true,
 }: PostJobPageProps) {
-  const [showListPilotCars, setShowListPilotCars] = useState(false);
+  const [showAllocation, setShowAllocation] = useState(false);
   const [jobData, setJobData] = useState<any>(null);
 
   const handleJobSave = (data: any) => {
-    // Store job data and navigate to pilot cars list
+    // Store job config and move to the pilot car allocation step.
     setJobData(data);
-    setShowListPilotCars(true);
+    setShowAllocation(true);
   };
 
-  const handlePilotCarsSubmit = (selectedPilotCars: any[]) => {
+  const handleAllocationConfirm = (allocation: AllocationResult) => {
     const finalJobData = {
       type: "pilot-car",
       status: "open",
       createdDate: new Date().toISOString(),
       title: jobData?.jobTitle || "",
-      jobData: jobData,
-      selectedPilotCars: selectedPilotCars,
+      jobData,
+      allocation,
     };
-    
+
     onSave(finalJobData);
   };
 
-  const handleBackFromPilotCars = () => {
-    setShowListPilotCars(false);
+  const handleBackFromAllocation = () => {
+    setShowAllocation(false);
   };
 
-  // If showing pilot cars list, render that page
-  if (showListPilotCars) {
+  // Pilot Car Allocation step — shown after all states are configured & job posted.
+  if (showAllocation) {
     return (
-      <ListPilotCarsPage
-        onBack={handleBackFromPilotCars}
-        onSubmit={handlePilotCarsSubmit}
-        jobData={{
-          type: "pilot-car",
-          pilotCarJobInfo: jobData,
-        }}
+      <PilotCarAllocation
+        onBack={handleBackFromAllocation}
+        onConfirm={handleAllocationConfirm}
+        jobTitle={jobData?.jobTitle}
+        stateCount={jobData?.selectedStates?.length}
+        canPostJobs={canPostJobs}
       />
     );
   }
