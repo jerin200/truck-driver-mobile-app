@@ -24,6 +24,7 @@ import { Badge } from './ui/badge';
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerDescription, DrawerFooter, DrawerClose } from './ui/drawer';
 import trackingMapImage from 'figma:asset/1f5cbd94e64bd6468d47d611846ed0c8a6eaf1a1.png';
 import ReportIncidentDrawer from './ReportIncidentDrawer';
+import ConvoyJobFlow from './ConvoyJobFlow';
 import { useTripExecution } from '../hooks/useTripExecution';
 
 interface LiveMapDrivingProps {
@@ -375,6 +376,10 @@ export default function LiveMapDriving({
           </div>
         </DrawerContent>
       </Drawer>
+
+      {/* Pilot/Escort Convoy Job — notifications + job confirmation, payment hold,
+          invoice review/dispute, and payment capture, all layered over this screen. */}
+      <ConvoyJobFlow onExitToTrip={onBack} />
     </div>
   );
 }

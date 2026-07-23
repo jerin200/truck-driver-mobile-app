@@ -136,9 +136,9 @@ export default function App() {
             />
           )}
           {currentScreen === 'permit-card-options' && (
-            <PermitCardOptions 
+            <PermitCardOptions
               onBack={() => setCurrentScreen('dashboard')}
-              onNavigate={handleNavigate} 
+              onNavigate={handleNavigate}
             />
           )}
         </div>
