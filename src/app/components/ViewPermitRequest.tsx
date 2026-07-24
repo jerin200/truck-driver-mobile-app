@@ -6375,6 +6375,11 @@ export default function ViewPermitRequest({
           }}
           initialTab={activeJobTab}
           onJobUpdate={handleJobUpdate}
+          onConfirmJob={() => {
+            setShowJobDetailsPage(false);
+            setActiveJob(null);
+            setFullScreenMapOpen(true);
+          }}
         />
       )}
 

@@ -239,6 +239,8 @@ interface JobDetailsPageProps {
   initialTab?: "details" | "bidding" | "invoice";
   loading?: boolean;
   onJobUpdate?: (updatedJob: PilotJob) => void;
+  /** Called when the driver confirms the job is starting — should navigate to Live Tracking. */
+  onConfirmJob?: () => void;
 }
 
 export default function JobDetailsPage({
@@ -248,6 +250,7 @@ export default function JobDetailsPage({
   initialTab,
   loading = false,
   onJobUpdate,
+  onConfirmJob,
 }: JobDetailsPageProps) {
   // Determine default tab based on job status
   const getDefaultTab = ():
@@ -654,11 +657,15 @@ export default function JobDetailsPage({
   };
 
   const handleStartJob = () => {
-    showSnackbar(
-      "Job started — timer is now running",
-      "success",
-      4000,
-    );
+    if (onConfirmJob) {
+      onConfirmJob();
+    } else {
+      showSnackbar(
+        "Job started — timer is now running",
+        "success",
+        4000,
+      );
+    }
   };
 
   const handleStopJob = () => {
@@ -1568,9 +1575,10 @@ export default function JobDetailsPage({
             </div>
           </div>
         </Tabs>
+      </div>
 
-        {/* Bottom Action Bar - Outside Content Area */}
-        <div className="border-t border-gray-200 bg-white px-4 py-3">
+      {/* Bottom Action Bar - fixed to the bottom, outside the scrollable area */}
+      <div className="flex-none border-t border-gray-200 bg-white px-4 py-3 safe-area-inset-bottom">
           {jobStatus === "Bid Received" ||
           jobStatus === "Bidding Closed" ||
           jobStatus === "Open for Bidding" ? (
@@ -1582,7 +1590,7 @@ export default function JobDetailsPage({
               className="w-full h-12"
               onClick={handleStartJob}
             >
-              Start Job
+              Confirm Job
             </PrimaryButton>
           ) : jobStatus === "In Progress" ? (
             <PrimaryButton
@@ -1821,7 +1829,6 @@ export default function JobDetailsPage({
             onSubmitSuccess={handleRatingSubmit}
           />
         )}
-      </div>
     </div>
   );
 }

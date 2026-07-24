@@ -7,12 +7,10 @@ import {
   Gauge,
   Camera,
   ShieldCheck,
-  CreditCard,
   Receipt,
   Hash,
   CalendarDays,
   Check,
-  AlertTriangle,
   XCircle,
   FileText,
   Upload,
@@ -21,6 +19,7 @@ import {
   Sparkles,
   RefreshCcw,
   Timer,
+  Info,
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Label } from './ui/label';
@@ -55,8 +54,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
 type Step =
   | 'idle'
-  | 'jobConfirmation'
-  | 'paymentHold'
   | 'invoiceReview'
   | 'raiseDispute'
   | 'disputeSubmitted'
@@ -85,7 +82,6 @@ const JOB = {
   bufferPercent: 8,
   currency: 'CAD',
   odometerReading: '48,213 mi',
-  odometerPhotoName: 'odometer_start_07232026.jpg',
   totalMiles: 342,
 };
 
@@ -95,26 +91,27 @@ const holdAmount = Math.round((JOB.jobAmount + bufferAmount) * 100) / 100;
 const INVOICE = {
   number: 'INV-2026-5502',
   mileage: `${JOB.totalMiles} mi`,
-  hours: '1.2 hrs standby',
-  charges: [
-    { label: 'Base Escort Fee (Per Mile)', sub: `${JOB.totalMiles} mi × $${JOB.ratePerMile.toFixed(2)}/mi`, amount: 2223.0 },
-    { label: 'Standby Hours', sub: '1.2 hrs × $95.00/hr', amount: 114.0 },
-    { label: 'Toll & Permit Reimbursement', sub: undefined as string | undefined, amount: 42.0 },
-  ],
-  taxRate: 0.05,
+  standbyHours: '1.2 hrs',
+  jobFee: 500.0,
+  cardProcessingRate: 0.029,
+  cardProcessingFixed: 0.3,
+  platformFeeRate: 0.08,
 };
-const invoiceSubtotal = INVOICE.charges.reduce((s, c) => s + c.amount, 0);
-const invoiceTax = Math.round(invoiceSubtotal * INVOICE.taxRate * 100) / 100;
-const invoiceTotal = Math.round((invoiceSubtotal + invoiceTax) * 100) / 100;
+const round2 = (n: number) => Math.round(n * 100) / 100;
+const cardProcessingFee = round2(INVOICE.jobFee * INVOICE.cardProcessingRate + INVOICE.cardProcessingFixed);
+const platformFee = round2(INVOICE.jobFee * INVOICE.platformFeeRate);
+const invoiceTotal = round2(INVOICE.jobFee + cardProcessingFee + platformFee);
 
+// Revised invoice after a successful dispute — pilot company reduces the job fee.
+const REVISED_JOB_FEE = 450.0;
+const revisedCardProcessingFee = round2(REVISED_JOB_FEE * INVOICE.cardProcessingRate + INVOICE.cardProcessingFixed);
+const revisedPlatformFee = round2(REVISED_JOB_FEE * INVOICE.platformFeeRate);
+const revisedTotal = round2(REVISED_JOB_FEE + revisedCardProcessingFee + revisedPlatformFee);
 const REVISED_CHARGES = [
-  { label: 'Base Escort Fee (Per Mile)', sub: `${JOB.totalMiles} mi × $${JOB.ratePerMile.toFixed(2)}/mi`, amount: 2223.0, previousAmount: undefined as number | undefined },
-  { label: 'Standby Hours', sub: '0.5 hrs × $95.00/hr (reduced)', amount: 47.5, previousAmount: 114.0 },
-  { label: 'Toll & Permit Reimbursement', sub: undefined as string | undefined, amount: 42.0, previousAmount: undefined as number | undefined },
+  { label: 'Job Fee', sub: undefined as string | undefined, amount: REVISED_JOB_FEE, previousAmount: INVOICE.jobFee as number | undefined },
+  { label: 'Card Processing Fee', sub: undefined as string | undefined, amount: revisedCardProcessingFee, previousAmount: cardProcessingFee as number | undefined },
+  { label: 'Overwize Platform Fee (8%)', sub: undefined as string | undefined, amount: revisedPlatformFee, previousAmount: platformFee as number | undefined },
 ];
-const revisedSubtotal = REVISED_CHARGES.reduce((s, c) => s + c.amount, 0);
-const revisedTax = Math.round(revisedSubtotal * INVOICE.taxRate * 100) / 100;
-const revisedTotal = Math.round((revisedSubtotal + revisedTax) * 100) / 100;
 
 const DISPUTE_REASONS = [
   'Standby hours overstated',
@@ -278,15 +275,32 @@ function InfoRow({ label, value, mono, strong }: { label: string; value: string;
   );
 }
 
-function MoneyRow({ label, sub, amount, strong }: { label: string; sub?: string; amount: number; strong?: boolean }) {
+function MoneyRow({
+  label,
+  sub,
+  amount,
+  strong,
+  showPlus,
+  infoIcon,
+}: {
+  label: string;
+  sub?: string;
+  amount: number;
+  strong?: boolean;
+  showPlus?: boolean;
+  infoIcon?: boolean;
+}) {
   return (
     <div className="flex items-start justify-between gap-4 py-2.5">
       <div className="min-w-0">
-        <p className={`text-[13px] ${strong ? 'font-semibold text-[#101828]' : 'text-[#4a5565]'}`}>{label}</p>
+        <p className={`flex items-center gap-1 text-[13px] ${strong ? 'font-semibold text-[#101828]' : 'text-[#4a5565]'}`}>
+          {label}
+          {infoIcon && <Info className="w-3 h-3 text-gray-300 shrink-0" />}
+        </p>
         {sub && <p className="text-[11px] text-[#9ca3af] mt-0.5">{sub}</p>}
       </div>
       <p className={`shrink-0 tabular-nums ${strong ? 'text-[15px] font-bold text-[#101828]' : 'text-[13px] font-semibold text-[#101828]'}`}>
-        ${money(amount)}
+        {showPlus ? '+' : ''}${money(amount)}
       </p>
     </div>
   );
@@ -312,16 +326,19 @@ function PrimaryButton({
   children,
   onClick,
   disabled,
+  size = 'default',
 }: {
   children: React.ReactNode;
   onClick?: () => void;
   disabled?: boolean;
+  size?: 'default' | 'sm';
 }) {
+  const sizeCls = size === 'sm' ? 'h-9 text-[13px]' : 'h-12 text-[15px]';
   return (
     <Button
       onClick={onClick}
       disabled={disabled}
-      className={`w-full h-12 rounded-xl font-semibold text-[15px] transition-all active:scale-[0.98] ${
+      className={`w-full ${sizeCls} rounded-[6px] font-semibold transition-all active:scale-[0.98] ${
         disabled
           ? 'bg-gray-200 text-gray-400'
           : 'bg-[#F89823] text-[#1a1a1a] hover:bg-[#e8880d] shadow-[0px_4px_14px_0px_rgba(248,152,35,0.30)]'
@@ -337,22 +354,25 @@ function SecondaryButton({
   onClick,
   tone = 'neutral',
   disabled,
+  size = 'default',
 }: {
   children: React.ReactNode;
   onClick?: () => void;
   tone?: 'neutral' | 'danger';
   disabled?: boolean;
+  size?: 'default' | 'sm';
 }) {
   const cls =
     tone === 'danger'
       ? 'border-[#FECDD3] text-[#E11D48] hover:bg-[#FFF1F2]'
       : 'border-[#e2e2e2] text-[#374151] hover:bg-gray-50';
+  const sizeCls = size === 'sm' ? 'h-9 text-[13px]' : 'h-12 text-[15px]';
   return (
     <Button
       onClick={onClick}
       disabled={disabled}
       variant="outline"
-      className={`w-full h-12 rounded-xl font-semibold text-[15px] bg-white transition-all active:scale-[0.98] disabled:opacity-40 ${cls}`}
+      className={`w-full ${sizeCls} rounded-[6px] font-semibold bg-white transition-all active:scale-[0.98] disabled:opacity-40 ${cls}`}
     >
       {children}
     </Button>
@@ -377,26 +397,23 @@ function SuccessBurst({ tone = 'green' }: { tone?: 'green' | 'orange' }) {
   );
 }
 
-function CountdownCard({ remainingMs, note }: { remainingMs: number; note: string }) {
+function CountdownCard({ remainingMs }: { remainingMs: number }) {
   const urgent = remainingMs <= 60 * 60 * 1000;
   return (
     <div
-      className={`rounded-2xl border px-4 py-3.5 flex items-center gap-3 ${
-        urgent ? 'bg-[#FFF1F2] border-[#FECDD3]' : 'bg-[#FFFBF5] border-[#FCE3C4]'
+      className={`rounded-[6px] bg-white border border-gray-100 border-l-4 px-4 py-3.5 flex items-center gap-3 shadow-[0px_1px_3px_0px_rgba(95,95,95,0.06)] ${
+        urgent ? 'border-l-[#E11D48]' : 'border-l-[#F89823]'
       }`}
     >
-      <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${urgent ? 'bg-[#FFE4E6]' : 'bg-[#FFF3E0]'}`}>
-        <Timer className={`w-5 h-5 ${urgent ? 'text-[#E11D48]' : 'text-[#D97706]'}`} />
+      <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${urgent ? 'bg-[#FFF1F2]' : 'bg-[#FFF3E0]'}`}>
+        <Timer className={`w-4 h-4 ${urgent ? 'text-[#E11D48]' : 'text-[#D97706]'}`} />
       </div>
       <div className="flex-1 min-w-0">
-        <p className={`text-[11px] font-semibold uppercase tracking-wide ${urgent ? 'text-[#E11D48]' : 'text-[#B45309]'}`}>
-          Review Window
-        </p>
-        <p className={`text-[18px] font-bold tabular-nums leading-tight ${urgent ? 'text-[#9F1239]' : 'text-[#101828]'}`}>
-          {formatCountdown(remainingMs)} remaining
+        <p className="text-[11px] font-medium text-[#6b7280] leading-tight">Automatically approves in</p>
+        <p className={`text-[19px] font-bold tabular-nums leading-tight mt-0.5 ${urgent ? 'text-[#E11D48]' : 'text-[#101828]'}`}>
+          {formatCountdown(remainingMs)}
         </p>
       </div>
-      <p className="text-[11px] text-[#6b7280] text-right max-w-[110px] leading-snug">{note}</p>
     </div>
   );
 }
@@ -413,7 +430,7 @@ function UploadTile({
   accept: string;
 }) {
   return (
-    <label className="flex flex-col items-center justify-center gap-1.5 h-24 rounded-xl border-2 border-dashed border-gray-300 bg-gray-50 hover:border-[#F89823] hover:bg-[#FFFBF5] cursor-pointer transition-all active:scale-[0.98]">
+    <label className="flex flex-col items-center justify-center gap-1.5 h-24 rounded-[6px] border-2 border-dashed border-gray-300 bg-gray-50 hover:border-[#F89823] hover:bg-[#FFFBF5] cursor-pointer transition-all active:scale-[0.98]">
       <Icon className="w-5 h-5 text-[#9ca3af]" />
       <span className="text-[12px] font-semibold text-[#4a5565]">{label}</span>
       <input type="file" accept={accept} multiple onChange={onChange} className="hidden" />
@@ -451,6 +468,17 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
   const [notifCollapsed, setNotifCollapsed] = useState(false);
   const [declinedOnce, setDeclinedOnce] = useState(false);
 
+  const [toast, setToast] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showToast = (message: string) => {
+    setToast(message);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 8000);
+  };
+  useEffect(() => () => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+  }, []);
+
   const [convoyConfirmedAt, setConvoyConfirmedAt] = useState<number | null>(null);
   const [invoiceReadyAt, setInvoiceReadyAt] = useState<number | null>(null);
   const [invoiceOutcome, setInvoiceOutcome] = useState<'pending' | 'approved' | 'disputed'>('pending');
@@ -480,7 +508,7 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
     const t = setTimeout(() => {
       setInvoiceReadyAt(Date.now());
       setNotification('invoiceReady');
-    }, 6000);
+    }, 9000);
     return () => clearTimeout(t);
   }, [convoyConfirmedAt]);
 
@@ -566,26 +594,34 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
                       <div>
                         <p className="text-[15px] font-bold text-[#101828] leading-tight">Pilot Car Ready to Start</p>
                         <p className="text-[13px] text-[#4a5565] mt-1 leading-relaxed">
-                          The Pilot Car Driver has started the job for Pilot/Escort Job #{JOB.number}. Please
-                          confirm to begin the convoy.
+                          The Pilot Car Driver has started the job. Please confirm to begin the convoy.
                         </p>
                       </div>
                     </div>
 
+                    <div className="rounded-[6px] border border-gray-200 bg-gray-50 px-3.5 py-3 mb-3 space-y-1.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-[12px] text-[#6b7280]">Job Number</span>
+                        <span className="text-[13px] font-semibold text-[#101828]">#{JOB.number}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-[12px] text-[#6b7280]">Pilot Car Driver</span>
+                        <span className="text-[13px] font-semibold text-[#101828]">{JOB.pilotDriverName}</span>
+                      </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-[12px] text-[#6b7280]">Pilot Company</span>
+                        <span className="text-[13px] font-semibold text-[#101828]">{JOB.pilotCompany}</span>
+                      </div>
+                    </div>
+
                     {JOB.pricingType === 'Per Mile' && (
-                      <div className="rounded-xl border border-gray-200 bg-gray-50 px-3.5 py-3 mb-3 space-y-2.5">
-                        <div className="flex items-center gap-2">
-                          <Gauge className="w-4 h-4 text-[#6b7280]" />
+                      <div className="flex items-center gap-2.5 rounded-[6px] border border-gray-200 bg-gray-50 px-3.5 py-3 mb-3">
+                        <Gauge className="w-4 h-4 text-[#6b7280] shrink-0" />
+                        <div className="min-w-0">
                           <p className="text-[11px] font-semibold text-[#374151] uppercase tracking-wide">
                             Odometer Reading Submitted
                           </p>
-                        </div>
-                        <p className="text-[15px] font-bold text-[#101828] tabular-nums">{JOB.odometerReading}</p>
-                        <div className="flex items-center gap-2.5 rounded-lg bg-white border border-gray-200 px-2.5 py-2">
-                          <div className="w-8 h-8 rounded-md bg-gray-100 flex items-center justify-center shrink-0">
-                            <Camera className="w-4 h-4 text-gray-400" />
-                          </div>
-                          <p className="text-[12px] text-[#4a5565] truncate">{JOB.odometerPhotoName}</p>
+                          <p className="text-[14px] font-bold text-[#101828] tabular-nums">{JOB.odometerReading}</p>
                         </div>
                       </div>
                     )}
@@ -593,8 +629,8 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
                     <div className="flex items-start gap-2 bg-[#FFFBF5] border border-[#FCE3C4] rounded-xl px-3.5 py-2.5 mb-4">
                       <ShieldCheck className="w-4 h-4 text-[#D97706] shrink-0 mt-0.5" />
                       <p className="text-[11px] text-[#B45309] leading-relaxed">
-                        The job amount of ${money(holdAmount)} {JOB.currency} will be temporarily blocked on your
-                        card and released after job completion.
+                        ${money(holdAmount)} {JOB.currency} will be temporarily held on your card to secure
+                        payment. You'll only be charged after the job is completed.
                       </p>
                     </div>
 
@@ -602,6 +638,7 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
                       <div className="flex-1">
                         <SecondaryButton
                           tone="danger"
+                          size="sm"
                           onClick={() => {
                             setNotification(null);
                             setStep('jobDeclined');
@@ -612,9 +649,13 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
                       </div>
                       <div className="flex-1">
                         <PrimaryButton
+                          size="sm"
                           onClick={() => {
                             setNotification(null);
-                            setStep('jobConfirmation');
+                            setConvoyConfirmedAt(Date.now());
+                            showToast(
+                              `Payment Authorization Hold Placed — $${money(holdAmount)} ${JOB.currency} held on your card.`,
+                            );
                           }}
                         >
                           Confirm Job
@@ -633,13 +674,13 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
                       <div>
                         <p className="text-[15px] font-bold text-[#101828] leading-tight">Invoice Ready for Review</p>
                         <p className="text-[13px] text-[#4a5565] mt-1 leading-relaxed">
-                          A new invoice for Convoy Job #{JOB.number} is ready for review. Please review the
-                          invoice within 24 hours. If no action is taken before the review window expires, the
-                          invoice will be automatically approved and payment will be processed.
+                          Invoice for Pilot/Escort Job #{JOB.number} is ready. Review it within 24 hours, or it
+                          will be automatically approved and payment processed.
                         </p>
                       </div>
                     </div>
                     <PrimaryButton
+                      size="sm"
                       onClick={() => {
                         setNotification(null);
                         setStep('invoiceReview');
@@ -707,13 +748,21 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
           <div className="absolute top-3 left-3 right-3 z-40 animate-in fade-in">
             <button
               onClick={() => openNotification('pilotCarReady')}
-              className="w-full flex items-center gap-2.5 bg-[#1a1a1a]/90 backdrop-blur-sm text-white rounded-xl px-3.5 py-2.5 shadow-lg active:scale-[0.98] transition-transform"
+              className="w-full flex items-center gap-2.5 bg-[#1a1a1a]/90 backdrop-blur-sm text-white rounded-[6px] px-3.5 py-2.5 shadow-lg active:scale-[0.98] transition-transform"
             >
               <Bell className="w-4 h-4 text-[#F89823] shrink-0" />
               <span className="text-[12px] font-medium flex-1 text-left">
                 Pilot car job start declined — tap to reconsider
               </span>
             </button>
+          </div>
+        )}
+        {toast && (
+          <div className="absolute top-3 inset-x-3 z-[60] flex justify-center pointer-events-none animate-in fade-in slide-in-from-top-2 duration-300">
+            <div className="max-w-full flex items-start gap-1.5 bg-[#1a1a1a]/95 text-white text-[11px] font-medium pl-2.5 pr-3 py-2 rounded-[6px] shadow-lg">
+              <Check className="w-3 h-3 text-[#4ADE80] shrink-0 mt-0.5" strokeWidth={3} />
+              <span className="leading-relaxed">{toast}</span>
+            </div>
           </div>
         )}
       </>
@@ -760,97 +809,6 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
     }
 
     // ==========================================================
-    // SCREEN · Job Confirmation
-    // ==========================================================
-    if (step === 'jobConfirmation') {
-      return (
-        <Scaffold
-          title="Job Confirmation"
-          subtitle={JOB.number}
-          footer={<PrimaryButton onClick={() => setStep('paymentHold')}>Confirm Job</PrimaryButton>}
-        >
-          <div className="px-4 pt-4 pb-6 space-y-4">
-            <div className={CARD}>
-              <CardHeader icon={Truck} title="Job Details" tint="#EFF6FF" />
-              <div className="px-4 py-1">
-                <InfoRow label="Job Number" value={JOB.number} mono />
-                <InfoRow label="Pilot Car Driver" value={JOB.pilotDriverName} />
-                <InfoRow label="Pilot Company" value={JOB.pilotCompany} />
-                <InfoRow label="Pricing Type" value={`${JOB.pricingType} · $${JOB.ratePerMile.toFixed(2)}/mi`} />
-              </div>
-              <div className="bg-[#FFF8F0] border-t border-[#FCE3C4] px-4 py-3.5 flex items-center justify-between">
-                <span className="text-[14px] font-bold text-[#101828]">Job Amount</span>
-                <span className="text-[20px] font-bold text-[#101828] tabular-nums">
-                  ${money(JOB.jobAmount)}
-                  <span className="text-[12px] font-medium text-[#9ca3af] ml-1">{JOB.currency}</span>
-                </span>
-              </div>
-            </div>
-
-            <div className="flex items-start gap-2 px-1">
-              <ShieldCheck className="w-4 h-4 text-[#16A34A] shrink-0 mt-0.5" />
-              <p className="text-[11px] text-[#6b7280] leading-relaxed">
-                Confirming will place a temporary authorization hold on your payment method for the job amount
-                plus a buffer. You will not be charged until the invoice is approved.
-              </p>
-            </div>
-          </div>
-        </Scaffold>
-      );
-    }
-
-    // ==========================================================
-    // SCREEN · Payment Authorization Hold
-    // ==========================================================
-    if (step === 'paymentHold') {
-      return (
-        <div className="flex flex-col h-full bg-[#f6f6f6] w-full overflow-hidden">
-          <div className="flex-1 overflow-y-auto">
-            <div className="px-5 pt-10 pb-4 flex flex-col items-center text-center">
-              <SuccessBurst tone="orange" />
-              <h1 className="mt-5 text-[22px] font-bold text-[#101828]">Payment Authorization Hold Placed</h1>
-            </div>
-
-            <div className="px-4 pb-6 space-y-4">
-              <div className={CARD}>
-                <CardHeader icon={CreditCard} title="Authorization Summary" tint="#FFF3E0" color="#D97706" />
-                <div className="px-4 py-2">
-                  <MoneyRow label="Agreed Amount" amount={JOB.jobAmount} />
-                  <MoneyRow label={`Buffer (${JOB.bufferPercent}%)`} sub="Covers potential additional charges" amount={bufferAmount} />
-                </div>
-                <div className="bg-[#111827] px-4 py-4 flex items-center justify-between">
-                  <span className="text-[11px] font-medium text-white/60 uppercase tracking-wider">Authorized Hold</span>
-                  <span className="text-[24px] font-bold text-white tabular-nums">
-                    ${money(holdAmount)} <span className="text-[12px] text-white/50">{JOB.currency}</span>
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-start gap-2.5 bg-[#EFF6FF] border border-[#BFDBFE] rounded-2xl px-4 py-3.5">
-                <ShieldCheck className="w-4 h-4 text-[#2563EB] shrink-0 mt-0.5" />
-                <p className="text-[12px] text-[#1e40af] leading-relaxed">
-                  Your payment method has been authorized for ${money(holdAmount)} {JOB.currency}. This amount is
-                  on hold only and has not been charged. The final payment will be captured after invoice
-                  approval or when the review window expires.
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="flex-none bg-white border-t border-[#e6e3df] px-4 py-3 safe-area-inset-bottom">
-            <PrimaryButton
-              onClick={() => {
-                setConvoyConfirmedAt(Date.now());
-                setStep('idle');
-              }}
-            >
-              Continue
-            </PrimaryButton>
-          </div>
-        </div>
-      );
-    }
-
-    // ==========================================================
     // SCREEN · Invoice Review
     // ==========================================================
     if (step === 'invoiceReview') {
@@ -880,7 +838,7 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
           }
         >
           <div className="px-4 pt-4 pb-6 space-y-4">
-            <CountdownCard remainingMs={invoiceCountdown} note="Auto-approves if no action is taken" />
+            <CountdownCard remainingMs={invoiceCountdown} />
 
             <div className={CARD}>
               <CardHeader icon={Truck} title="Job Details" tint="#EFF6FF" />
@@ -888,28 +846,33 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
                 <InfoRow label="Job Number" value={JOB.number} mono />
                 <InfoRow label="Pilot Company" value={JOB.pilotCompany} />
                 <InfoRow label="Mileage" value={INVOICE.mileage} mono />
-                <InfoRow label="Hours" value={INVOICE.hours} />
+                <InfoRow label="Standby Hours" value={INVOICE.standbyHours} />
               </div>
             </div>
 
             <div className={CARD}>
-              <CardHeader icon={Receipt} title="Charges" tint="#FFF3E0" color="#D97706" />
+              <CardHeader icon={Receipt} title="Invoice Summary" tint="#FFF3E0" color="#D97706" />
               <div className="px-4 py-1">
-                {INVOICE.charges.map((c, i) => (
-                  <div key={c.label}>
-                    {i > 0 && <div className="border-t border-gray-100" />}
-                    <MoneyRow label={c.label} sub={c.sub} amount={c.amount} />
-                  </div>
-                ))}
+                <MoneyRow label="Job Fee" amount={INVOICE.jobFee} />
                 <div className="border-t border-gray-100" />
-                <MoneyRow label="Taxes" sub={`${(INVOICE.taxRate * 100).toFixed(0)}%`} amount={invoiceTax} />
+                <MoneyRow label="Card Processing Fee" amount={cardProcessingFee} showPlus infoIcon />
+                <div className="border-t border-gray-100" />
+                <MoneyRow
+                  label={`Overwize Platform Fee (${(INVOICE.platformFeeRate * 100).toFixed(0)}%)`}
+                  amount={platformFee}
+                  showPlus
+                  infoIcon
+                />
+                <div className="border-t border-gray-100" />
+                <MoneyRow label="Total Payable" amount={invoiceTotal} strong />
               </div>
-              <div className="bg-[#111827] px-4 py-4 flex items-center justify-between">
-                <span className="text-[11px] font-medium text-white/60 uppercase tracking-wider">Total Amount</span>
-                <span className="text-[24px] font-bold text-white tabular-nums">
-                  ${money(invoiceTotal)} <span className="text-[12px] text-white/50">{JOB.currency}</span>
-                </span>
-              </div>
+            </div>
+
+            <div className="rounded-2xl overflow-hidden bg-[#111827] px-4 py-4 flex items-center justify-between">
+              <span className="text-[11px] font-medium text-white/60 uppercase tracking-wider">Total Payable</span>
+              <span className="text-[24px] font-bold text-white tabular-nums">
+                ${money(invoiceTotal)} <span className="text-[12px] text-white/50">{JOB.currency}</span>
+              </span>
             </div>
           </div>
         </Scaffold>
@@ -946,14 +909,6 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
           }
         >
           <div className="px-4 pt-4 pb-6 space-y-4">
-            <div className="flex items-start gap-2.5 bg-[#FFF1F2] border border-[#FECDD3] rounded-2xl px-4 py-3">
-              <AlertTriangle className="w-4 h-4 text-[#E11D48] shrink-0 mt-0.5" />
-              <p className="text-[12px] text-[#9F1239] leading-relaxed">
-                Raising a dispute places this invoice on hold. The Pilot Car Driver will have 24 hours to review
-                and submit a revised invoice.
-              </p>
-            </div>
-
             <div className={CARD}>
               <CardHeader icon={FileText} title="Dispute Reason" tint="#FFF1F2" color="#E11D48" right={<span className="text-[11px] font-semibold text-[#E11D48]">Required</span>} />
               <div className="p-4">
@@ -1067,7 +1022,7 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
           }
         >
           <div className="px-4 pt-4 pb-6 space-y-4">
-            <CountdownCard remainingMs={revisedCountdown} note="Auto-approves if no action is taken" />
+            <CountdownCard remainingMs={revisedCountdown} />
 
             <div className="rounded-2xl overflow-hidden bg-white border border-[#ececec] shadow-[0px_1px_3px_0px_rgba(95,95,95,0.06)]">
               <div className="h-1.5 bg-gradient-to-r from-[#F89823] to-[#F5761F]" />
@@ -1091,7 +1046,7 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
             </div>
 
             <div className={CARD}>
-              <CardHeader icon={Receipt} title="Updated Charges" tint="#FFF3E0" color="#D97706" />
+              <CardHeader icon={Receipt} title="Updated Invoice Summary" tint="#FFF3E0" color="#D97706" />
               <div className="px-4 py-1">
                 {REVISED_CHARGES.map((c, i) => (
                   <div key={c.label}>
@@ -1099,8 +1054,6 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
                     <ChargeDiffRow label={c.label} sub={c.sub} amount={c.amount} previousAmount={c.previousAmount} />
                   </div>
                 ))}
-                <div className="border-t border-gray-100" />
-                <MoneyRow label="Taxes" sub={`${(INVOICE.taxRate * 100).toFixed(0)}%`} amount={revisedTax} />
               </div>
               <div className="bg-[#111827] px-4 py-4 flex items-center justify-between">
                 <span className="text-[11px] font-medium text-white/60 uppercase tracking-wider">Revised Total</span>
@@ -1115,8 +1068,9 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
               <div className="p-4">
                 <div className="rounded-xl bg-gray-50 border border-gray-100 px-3.5 py-3">
                   <p className="text-[13px] text-[#374151] leading-relaxed">
-                    "Standby hours adjusted per your dispute — reduced from 1.2 hrs to 0.5 hrs based on the
-                    loading dock records. All other charges verified as accurate."
+                    "Job fee adjusted per your dispute — reduced from ${money(INVOICE.jobFee)} to $
+                    {money(REVISED_JOB_FEE)} after reviewing the standby time recorded. Processing and platform
+                    fees recalculated accordingly."
                   </p>
                   <p className="text-[11px] text-[#9ca3af] mt-2.5">— {JOB.pilotDriverName}, {JOB.pilotCompany}</p>
                 </div>
