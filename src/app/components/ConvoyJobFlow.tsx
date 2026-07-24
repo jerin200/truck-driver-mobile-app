@@ -16,7 +16,6 @@ import {
   FileText,
   Upload,
   X,
-  Download,
   Sparkles,
   RefreshCcw,
   Timer,
@@ -1174,11 +1173,7 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
             </div>
           </div>
 
-          <div className="flex-none bg-white border-t border-[#e6e3df] px-4 py-3 safe-area-inset-bottom space-y-2.5">
-            <SecondaryButton onClick={() => {}}>
-              <Download className="w-4 h-4 mr-1.5" />
-              View Receipt
-            </SecondaryButton>
+          <div className="flex-none bg-white border-t border-[#e6e3df] px-4 py-3 safe-area-inset-bottom">
             <PrimaryButton onClick={onExitToTrip}>Back to Trips</PrimaryButton>
           </div>
         </div>

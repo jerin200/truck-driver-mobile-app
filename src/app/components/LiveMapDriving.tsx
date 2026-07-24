@@ -1,16 +1,13 @@
 import { useState, useEffect } from 'react';
 import { 
-  ArrowLeft, 
-  Maximize2, 
-  Minimize2, 
-  Navigation, 
-  Phone, 
+  ArrowLeft,
+  Maximize2,
+  Minimize2,
+  Navigation,
   AlertTriangle,
   Camera,
-  Edit,
   MapPin,
   Clock,
-  Share2,
   Settings,
   Volume2,
   VolumeX,
@@ -269,41 +266,15 @@ export default function LiveMapDriving({
               </Button>
 
               {/* End Trip */}
-              <Button 
-                variant="outline" 
+              <Button
+                variant="outline"
                 className="h-14 flex-col gap-1 border-2"
                 onClick={() => setIsEndTripOpen(true)}
               >
                 <Flag className="h-5 w-5 text-[#F89823]" />
                 <span className="text-xs font-medium">End Trip</span>
               </Button>
-
-              {/* Request Route Change */}
-              <Button 
-                variant="outline" 
-                className="h-14 flex-col gap-1 border-2"
-              >
-                <Edit className="h-5 w-5 text-orange-500" />
-                <span className="text-xs font-medium">Route Change</span>
-              </Button>
-
-              {/* Share Location */}
-              <Button 
-                variant="outline" 
-                className="h-14 flex-col gap-1 border-2"
-              >
-                <Share2 className="h-5 w-5 text-green-500" />
-                <span className="text-xs font-medium">Share Location</span>
-              </Button>
             </div>
-
-            {/* Emergency Contact */}
-            <Button 
-              className="w-full mt-3 bg-red-500 hover:bg-red-600 text-white h-12"
-            >
-              <Phone className="h-5 w-5 mr-2" />
-              Emergency Contact
-            </Button>
           </div>
         </div>
       )}
