@@ -32,22 +32,6 @@ import {
   SelectValue,
 } from './ui/select';
 
-/* ────────────────────────────────────────────────────────────
- * Convoy Job Flow — embedded in the Live Tracking screen.
- *
- * Renders on top of LiveMapDriving:
- *   (idle, live map visible) → Pilot Car Ready notification →
- *   Job Confirmation → Payment Authorization Hold → (idle, back to
- *   live map) → Invoice Ready notification → Invoice Review (24h
- *   window) → Approve | Dispute → Dispute Submitted → (idle) →
- *   Revised Invoice Ready notification → Revised Invoice Review
- *   (24h window) → Approve → Payment Captured
- *
- * While `step === 'idle'` this component paints nothing but the
- * occasional notification banner, so the live map underneath stays
- * visible and interactive. Any other step takes over the full
- * viewport (absolute, within the map's own relative container).
- * ──────────────────────────────────────────────────────────── */
 
 const ORANGE = '#F89823';
 const DAY_MS = 24 * 60 * 60 * 1000;
