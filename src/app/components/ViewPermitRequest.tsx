@@ -229,6 +229,10 @@ interface Permit {
 interface ViewPermitRequestProps {
   permit: Permit;
   onBack: () => void;
+  /** Tab to land on, e.g. "invoice" when arriving from the Home widget. */
+  initialTab?: "actions" | "jobs" | "permits" | "info" | "invoice";
+  /** Job number whose Invoice Details screen should open immediately. */
+  focusInvoiceJobNumber?: string;
 }
 
 // Jobs Types
@@ -2741,6 +2745,8 @@ const MOCK_STATE_JOBS: StateJob[] = [
 export default function ViewPermitRequest({
   permit: initialPermit,
   onBack,
+  initialTab,
+  focusInvoiceJobNumber,
 }: ViewPermitRequestProps) {
   // Local state for permit to allow updates
   const [permit, setPermit] = useState(initialPermit);
@@ -2753,7 +2759,7 @@ export default function ViewPermitRequest({
   const [showCompare, setShowCompare] = useState(false);
   const [activeTab, setActiveTab] = useState<
     "actions" | "jobs" | "permits" | "info" | "invoice"
-  >("jobs");
+  >(initialTab ?? "jobs");
   const [activeJob, setActiveJob] = useState<PilotJob | null>(
     null,
   );
@@ -5086,6 +5092,9 @@ export default function ViewPermitRequest({
                 >
                   <InvoiceTabContent
                     relatedJobs={relatedJobs}
+                    focusInvoiceJobNumber={
+                      focusInvoiceJobNumber
+                    }
                   />
                 </TabsContent>
               </div>

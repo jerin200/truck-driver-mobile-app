@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import {
   AlertTriangle,
   ArrowRightLeft,
-  Bell,
   Building2,
   Check,
   CheckCircle2,
@@ -14,7 +13,6 @@ import {
   Receipt,
   Timer,
   User,
-  X,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import RaiseDisputeSheet, { DisputeData } from "./RaiseDisputeSheet";
@@ -82,6 +80,11 @@ interface InvoiceTabContentProps {
   payerCurrency?: string;
   /** Backend-configurable review period before auto approval (AC8 / AC9). */
   reviewWindowMs?: number;
+  /**
+   * Job number to open straight into Invoice Details — set when the driver
+   * arrives from the Home invoice notification widget (AC1 / AC7).
+   */
+  focusInvoiceJobNumber?: string;
 }
 
 /* ── helpers ─────────────────────────────────────────────── */
@@ -127,16 +130,27 @@ const PRICING_LABEL: Record<string, PilotInvoice["pricingType"]> = {
 };
 
 /**
+ * Currency each pilot car party invoiced in. Real invoices carry their own;
+ * this keeps one job on a foreign currency so conversion (AC12) is visible.
+ */
+const INVOICE_CURRENCY: Record<string, string> = {
+  "JOB-102": "CAD",
+};
+const DEFAULT_INVOICE_CURRENCY = "USD";
+
+/**
  * Builds the submitted-invoice list for the trip. Only jobs whose pilot car
  * party has submitted an invoice are included (AC2) — here, jobs with an
  * accepted bid. In production this comes from the invoice service.
  */
 function buildInvoices(relatedJobs: any[], now: number): PilotInvoice[] {
   return relatedJobs
-    .map((job, index): PilotInvoice | null => {
-      const bid = job.bids?.find((b: any) => b.status === "Accepted");
-      if (!bid) return null;
-
+    .map((job) => ({
+      job,
+      bid: job.bids?.find((b: any) => b.status === "Accepted"),
+    }))
+    .filter(({ bid }) => !!bid)
+    .map(({ job, bid }, index): PilotInvoice => {
       const jobFee = round2(Number(bid.amount) || 0);
       const processingFee = round2(jobFee * PROCESSING_RATE + PROCESSING_FIXED);
       const platformFee = round2(jobFee * PLATFORM_RATE);
@@ -152,9 +166,7 @@ function buildInvoices(relatedJobs: any[], now: number): PilotInvoice[] {
         pilotDriver: bid.contactPerson || "Pilot Car Driver",
         pilotCompany: bid.companyName || undefined,
         pricingType: PRICING_LABEL[job.pricingType] ?? "Flat Rate",
-        // Mixed currencies so conversion (AC12) is exercised; real invoices
-        // carry their own currency.
-        currency: index % 3 === 0 ? "CAD" : "USD",
+        currency: INVOICE_CURRENCY[job.id] ?? DEFAULT_INVOICE_CURRENCY,
         jobFee,
         processingFee,
         platformFee,
@@ -162,8 +174,7 @@ function buildInvoices(relatedJobs: any[], now: number): PilotInvoice[] {
         // Staggered submission times give each invoice a distinct review window.
         submittedAt: now - (6 + index * 3) * HOUR_MS,
       };
-    })
-    .filter((invoice): invoice is PilotInvoice => invoice !== null);
+    });
 }
 
 /* ── presentational primitives ───────────────────────────── */
@@ -715,6 +726,7 @@ export default function InvoiceTabContent({
   userRole: userRoleProp,
   payerCurrency = "USD",
   reviewWindowMs = DAY_MS,
+  focusInvoiceJobNumber,
 }: InvoiceTabContentProps) {
   const { showSnackbar } = useSnackbar();
 
@@ -734,7 +746,6 @@ export default function InvoiceTabContent({
   );
   const [openInvoice, setOpenInvoice] = useState<string | null>(null);
   const [disputeSheetFor, setDisputeSheetFor] = useState<string | null>(null);
-  const [notificationFor, setNotificationFor] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
   const statusOf = (jobNumber: string): InvoiceStatus =>
@@ -777,20 +788,15 @@ export default function InvoiceTabContent({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [now, invoices]);
 
-  /* AC1 / AC7 — a newly submitted invoice surfaces as a push notification. */
-  const firstPending = invoices.find(
-    (i) => statusOf(i.jobNumber) === "Pending Review",
-  );
-  const notifiedRef = useRef(false);
+  /* AC1 / AC7 — arriving from the Home invoice notification widget opens the
+     corresponding Invoice Details screen directly. */
+  const deepLinkedRef = useRef(false);
   useEffect(() => {
-    if (notifiedRef.current || !firstPending) return;
-    notifiedRef.current = true;
-    const id = setTimeout(
-      () => setNotificationFor(firstPending.jobNumber),
-      2500,
-    );
-    return () => clearTimeout(id);
-  }, [firstPending]);
+    if (deepLinkedRef.current || !focusInvoiceJobNumber) return;
+    if (!invoices.some((i) => i.jobNumber === focusInvoiceJobNumber)) return;
+    deepLinkedRef.current = true;
+    setOpenInvoice(focusInvoiceJobNumber);
+  }, [focusInvoiceJobNumber, invoices]);
 
   const active = invoices.find((i) => i.jobNumber === openInvoice) ?? null;
 
@@ -826,46 +832,6 @@ export default function InvoiceTabContent({
 
   return (
     <div className="w-full min-w-0">
-      {/* AC1 — push notification entry point */}
-      {notificationFor && !openInvoice && (
-        <div className="px-4 pt-4">
-          <div className="rounded-2xl bg-white border border-[#ececec] shadow-[0px_4px_16px_0px_rgba(16,24,40,0.08)] overflow-hidden">
-            <div className="p-3.5 flex gap-3">
-              <div className="w-9 h-9 rounded-xl bg-[#FFF3E0] flex items-center justify-center shrink-0">
-                <Bell className="w-4 h-4 text-[#D97706]" aria-hidden />
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-[14px] font-bold text-[#101828] leading-tight">
-                  Invoice Ready for Review
-                </p>
-                <p className="text-[12px] text-[#6b7280] leading-relaxed mt-1">
-                  An invoice for job {notificationFor} has been submitted.
-                  Review it before the window closes, or it approves
-                  automatically.
-                </p>
-              </div>
-              <button
-                onClick={() => setNotificationFor(null)}
-                aria-label="Dismiss notification"
-                className="w-8 h-8 -mt-1 -mr-1 rounded-full flex items-center justify-center shrink-0 cursor-pointer transition-colors duration-200 hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F89823]"
-              >
-                <X className="w-4 h-4 text-[#9ca3af]" />
-              </button>
-            </div>
-            <button
-              onClick={() => {
-                setOpenInvoice(notificationFor);
-                setNotificationFor(null);
-              }}
-              className="w-full min-h-[44px] px-4 py-2.5 border-t border-gray-100 text-[14px] font-semibold text-[#1a1a1a] cursor-pointer transition-colors duration-200 hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#B45309]"
-              style={{ backgroundColor: ORANGE }}
-            >
-              Review Invoice
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Header */}
       <div className="px-4 pt-4 pb-1">
         <h2 className="text-[17px] font-bold text-[#101828] leading-tight">

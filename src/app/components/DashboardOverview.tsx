@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   Truck,
   Briefcase,
@@ -18,6 +19,9 @@ import {
 import { Card, CardContent } from "./ui/card";
 import { Badge } from "./ui/badge";
 import Header from "./Header";
+import InvoiceReviewWidget, {
+  PendingInvoiceSummary,
+} from "./InvoiceReviewWidget";
 
 interface PermitState {
   code: string;
@@ -290,6 +294,37 @@ const MOCK_PERMITS: Permit[] = [
   },
 ];
 
+/**
+ * Pilot car invoices submitted for the driver's trips and still in
+ * "Pending Review". Sourced from the invoice service in production; the job
+ * numbers match the invoices listed on the trip's Invoice tab.
+ */
+const PENDING_INVOICE_REVIEWS: Omit<
+  PendingInvoiceSummary,
+  "autoApproveAt"
+>[] = [
+  {
+    tripId: "REQ-1001",
+    jobNumber: "JOB-102",
+    pilotDriver: "Sarah Chen",
+    pilotCompany: "Mid-Atlantic Escorts",
+    // Invoiced in CAD; shown in the payer's default currency (USD).
+    amount: 1134.96,
+    currency: "USD",
+  },
+  {
+    tripId: "REQ-1001",
+    jobNumber: "JOB-103",
+    pilotDriver: "James Williams",
+    pilotCompany: "Carolina Route Escorts",
+    amount: 1331.1,
+    currency: "USD",
+  },
+];
+
+/** Backend-configurable review period before an invoice auto approves. */
+const INVOICE_REVIEW_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 const MOCK_STATE_JOBS: StateJob[] = [
   {
     id: "JOB-CA-001",
@@ -391,12 +426,32 @@ const MOCK_STATE_JOBS: StateJob[] = [
 ];
 
 interface DashboardOverviewProps {
-  onNavigate?: (screen: string, data?: any) => void;
+  onNavigate?: (screen: string, data?: any, options?: any) => void;
 }
 
 export default function DashboardOverview({
   onNavigate,
 }: DashboardOverviewProps) {
+  // Review windows are anchored once per mount so the countdowns tick down
+  // rather than resetting on every render.
+  const pendingInvoiceReviews = useMemo(() => {
+    const mountedAt = Date.now();
+    return PENDING_INVOICE_REVIEWS.map((invoice, index) => ({
+      ...invoice,
+      autoApproveAt:
+        mountedAt + INVOICE_REVIEW_WINDOW_MS - (6 + index * 3) * 60 * 60 * 1000,
+    }));
+  }, []);
+
+  const handleReviewInvoice = (invoice: PendingInvoiceSummary) => {
+    const trip = MOCK_PERMITS.find((p) => p.requestId === invoice.tripId);
+    if (!trip || !onNavigate) return;
+    onNavigate("view-permit-request", trip, {
+      initialTab: "invoice",
+      focusInvoiceJobNumber: invoice.jobNumber,
+    });
+  };
+
   // Compute Stats
   const activeTripsCount = MOCK_PERMITS.filter(
     (p) => p.status === "In Transit",
@@ -557,6 +612,13 @@ export default function DashboardOverview({
 
           {/* Action Items Row - Full Width */}
           {totalActionItems > 0 && null}
+
+          {/* Invoices awaiting review (AC1 / AC7) */}
+          <InvoiceReviewWidget
+            invoices={pendingInvoiceReviews}
+            onReview={handleReviewInvoice}
+            reviewWindowMs={INVOICE_REVIEW_WINDOW_MS}
+          />
 
           {/* Active Trip Card */}
           {inTransitTrip && inTransitTrip.tracking && (

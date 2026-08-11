@@ -67,10 +67,18 @@ export default function App() {
   const [showLogoutDialog, setShowLogoutDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
 
-  const handleNavigate = (screen: string, params?: any) => {
+  // Extra hints for the destination screen, e.g. which tab to open and which
+  // invoice to deep-link into when arriving from the Home invoice widget.
+  const [navOptions, setNavOptions] = useState<{
+    initialTab?: string;
+    focusInvoiceJobNumber?: string;
+  }>({});
+
+  const handleNavigate = (screen: string, params?: any, options?: any) => {
     if (params) {
       setSelectedPermit(params);
     }
+    setNavOptions(options ?? {});
     setCurrentScreen(screen as Screen);
   };
 
@@ -108,8 +116,10 @@ export default function App() {
             />
           )}
           {currentScreen === 'view-permit-request' && selectedPermit && (
-            <ViewPermitRequest 
+            <ViewPermitRequest
               permit={selectedPermit}
+              initialTab={navOptions.initialTab as any}
+              focusInvoiceJobNumber={navOptions.focusInvoiceJobNumber}
               onBack={() => setCurrentScreen('permits')}
             />
           )}
