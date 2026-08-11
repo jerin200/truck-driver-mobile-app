@@ -3591,15 +3591,16 @@ export default function ViewPermitRequest({
                       value: "invoice",
                       label: "Invoice",
                       badge: (() => {
-                        const pendingInvoices =
-                          relatedJobs.filter(
-                            (job) =>
-                              job.acceptedBid?.jobStatus ===
-                                "Completed" &&
-                              !job.acceptedBid?.invoiceApproved,
+                        // Submitted pilot car invoices for this trip (AC2).
+                        const submittedInvoices =
+                          relatedJobs.filter((job) =>
+                            job.bids?.some(
+                              (bid: any) =>
+                                bid.status === "Accepted",
+                            ),
                           ).length;
-                        return pendingInvoices > 0
-                          ? pendingInvoices
+                        return submittedInvoices > 0
+                          ? submittedInvoices
                           : undefined;
                       })(),
                     },

@@ -1,893 +1,930 @@
-import { useState, useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
-  formatDate,
-  formatDateTimeBullet,
-} from "../utils/dateFormat";
-import {
-  ChevronDown,
-  CheckCircle,
   AlertTriangle,
+  ArrowRightLeft,
+  Bell,
+  Building2,
+  Check,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Hash,
+  Lock,
   Receipt,
-  Search,
-  Filter,
+  Timer,
+  User,
   X,
-  Info,
 } from "lucide-react";
 import { Button } from "./ui/button";
-import { Badge } from "./ui/badge";
-import { Separator } from "./ui/separator";
-import { Input } from "./ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "./ui/select";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "./ui/dialog";
 import RaiseDisputeSheet, { DisputeData } from "./RaiseDisputeSheet";
 import { useSnackbar } from "../contexts/SnackbarContext";
+import { formatDateTimeBullet } from "../utils/dateFormat";
+
+/* ============================================================
+ * Truck Driver · Review Pilot Car Invoices (Trip Details → Invoice tab)
+ *
+ * AC1  Entry points: push notification + Invoice tab
+ * AC2  One card per submitted invoice
+ * AC3  Invoice Details (read-only information + summary)
+ * AC4  Status on card and details screen
+ * AC5  Individual driver: Approve Invoice / Raise Dispute
+ * AC6  Company driver: read-only + admin message
+ * AC7  Invoices appear without manual refresh; notification deep-links
+ * AC8  Remaining review period before auto approval
+ * AC9  Auto approval on expiry → Payment Completed
+ * AC10 Raise Dispute workflow
+ * AC11 Same lifecycle for Flat Rate / Per Mile / Per Hour
+ * AC12 Amounts shown in the payer's default currency
+ * ============================================================ */
+
+const ORANGE = "#F89823";
+const HOUR_MS = 60 * 60 * 1000;
+const DAY_MS = 24 * HOUR_MS;
+
+/** Backend-configurable fee schedule (mocked here). */
+const PROCESSING_RATE = 0.029;
+const PROCESSING_FIXED = 0.3;
+const PLATFORM_RATE = 0.08;
+
+/** Stands in for the backend Currency Exchange Rate API (AC12). */
+const EXCHANGE_RATES: Record<string, number> = {
+  "CAD>USD": 0.705667,
+  "USD>CAD": 1.4171,
+};
+
+export type InvoiceStatus =
+  | "Pending Review"
+  | "Payment Completed"
+  | "Payment Disputed";
+
+export interface PilotInvoice {
+  invoiceNumber: string;
+  jobNumber: string;
+  jobKind: "Escort Job" | "Route Survey";
+  pilotDriver: string;
+  pilotCompany?: string;
+  pricingType: "Flat Rate" | "Per Mile" | "Per Hour";
+  /** Currency the pilot car party invoiced in. */
+  currency: string;
+  jobFee: number;
+  processingFee: number;
+  platformFee: number;
+  total: number;
+  submittedAt: number;
+}
 
 interface InvoiceTabContentProps {
   relatedJobs: any[];
+  /** Individual drivers can act; company drivers are read-only (AC5 / AC6). */
+  userRole?: "individual" | "company";
+  /** Payer's configured default payment currency (AC12). */
+  payerCurrency?: string;
+  /** Backend-configurable review period before auto approval (AC8 / AC9). */
+  reviewWindowMs?: number;
 }
+
+/* ── helpers ─────────────────────────────────────────────── */
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+const money = (n: number) =>
+  n.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
+function rateFor(from: string, to: string): number | null {
+  if (from === to) return null;
+  return EXCHANGE_RATES[`${from}>${to}`] ?? null;
+}
+
+/** "18 hours" / "45 minutes" — phrasing for the auto-approval reminder. */
+function formatReviewRemaining(ms: number): string {
+  if (ms <= 0) return "0 minutes";
+  const totalMinutes = Math.floor(ms / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours >= 1) return `${hours} ${hours === 1 ? "hour" : "hours"}`;
+  return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
+}
+
+/** "17h 42m" / "42m 09s" — the precise ticking value. */
+function formatCountdown(ms: number): string {
+  if (ms <= 0) return "0m 00s";
+  const totalSeconds = Math.floor(ms / 1000);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+  return `${m}m ${String(s).padStart(2, "0")}s`;
+}
+
+const PRICING_LABEL: Record<string, PilotInvoice["pricingType"]> = {
+  flat: "Flat Rate",
+  mileage: "Per Mile",
+  hourly: "Per Hour",
+};
+
+/**
+ * Builds the submitted-invoice list for the trip. Only jobs whose pilot car
+ * party has submitted an invoice are included (AC2) — here, jobs with an
+ * accepted bid. In production this comes from the invoice service.
+ */
+function buildInvoices(relatedJobs: any[], now: number): PilotInvoice[] {
+  return relatedJobs
+    .map((job, index): PilotInvoice | null => {
+      const bid = job.bids?.find((b: any) => b.status === "Accepted");
+      if (!bid) return null;
+
+      const jobFee = round2(Number(bid.amount) || 0);
+      const processingFee = round2(jobFee * PROCESSING_RATE + PROCESSING_FIXED);
+      const platformFee = round2(jobFee * PLATFORM_RATE);
+
+      return {
+        invoiceNumber: `INV-${String(job.id).replace(/\D/g, "") || index}`,
+        jobNumber: job.id,
+        jobKind:
+          job.jobType === "route-survey" ||
+          /survey/i.test(job.vehicleType ?? "")
+            ? "Route Survey"
+            : "Escort Job",
+        pilotDriver: bid.contactPerson || "Pilot Car Driver",
+        pilotCompany: bid.companyName || undefined,
+        pricingType: PRICING_LABEL[job.pricingType] ?? "Flat Rate",
+        // Mixed currencies so conversion (AC12) is exercised; real invoices
+        // carry their own currency.
+        currency: index % 3 === 0 ? "CAD" : "USD",
+        jobFee,
+        processingFee,
+        platformFee,
+        total: round2(jobFee + processingFee + platformFee),
+        // Staggered submission times give each invoice a distinct review window.
+        submittedAt: now - (6 + index * 3) * HOUR_MS,
+      };
+    })
+    .filter((invoice): invoice is PilotInvoice => invoice !== null);
+}
+
+/* ── presentational primitives ───────────────────────────── */
+
+const CARD =
+  "bg-white rounded-2xl border border-[#ececec] shadow-[0px_1px_3px_0px_rgba(95,95,95,0.06)] overflow-hidden";
+
+const STATUS_STYLE: Record<
+  InvoiceStatus,
+  { chip: string; dot: string; icon: typeof Timer }
+> = {
+  "Pending Review": {
+    chip: "bg-[#FFF3E0] text-[#B45309] border-[#FCE3C4]",
+    dot: "bg-[#D97706]",
+    icon: Timer,
+  },
+  "Payment Completed": {
+    chip: "bg-[#F0FDF4] text-[#15803D] border-[#BBF7D0]",
+    dot: "bg-[#16A34A]",
+    icon: CheckCircle2,
+  },
+  "Payment Disputed": {
+    chip: "bg-[#FFF1F2] text-[#BE123C] border-[#FECDD3]",
+    dot: "bg-[#E11D48]",
+    icon: AlertTriangle,
+  },
+};
+
+function StatusChip({
+  status,
+  size = "default",
+}: {
+  status: InvoiceStatus;
+  size?: "default" | "sm";
+}) {
+  const style = STATUS_STYLE[status];
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border font-semibold whitespace-nowrap ${
+        size === "sm"
+          ? "px-2 py-0.5 text-[11px]"
+          : "px-2.5 py-1 text-[12px]"
+      } ${style.chip}`}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full ${style.dot}`} aria-hidden />
+      {status}
+    </span>
+  );
+}
+
+function CardHeading({
+  icon: Icon,
+  title,
+  tint = "#EFF6FF",
+  color = "#2563EB",
+  right,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  tint?: string;
+  color?: string;
+  right?: React.ReactNode;
+}) {
+  return (
+    <div className="px-4 py-3 border-b border-gray-100 flex items-center gap-2.5">
+      <div
+        className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
+        style={{ backgroundColor: tint }}
+      >
+        <Icon className="w-4 h-4" style={{ color }} />
+      </div>
+      <h3 className="text-[14px] font-semibold text-[#101828] flex-1">
+        {title}
+      </h3>
+      {right}
+    </div>
+  );
+}
+
+function InfoRow({
+  label,
+  value,
+  children,
+}: {
+  label: string;
+  value?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 py-2.5">
+      <span className="text-[13px] text-[#6b7280] shrink-0">{label}</span>
+      {children ?? (
+        <span className="text-[13px] font-semibold text-[#101828] text-right">
+          {value}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function MoneyRow({
+  label,
+  sub,
+  amount,
+  currency,
+  strong,
+}: {
+  label: string;
+  sub?: string;
+  amount: number;
+  currency: string;
+  strong?: boolean;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 py-2.5">
+      <div className="min-w-0">
+        <p
+          className={`text-[13px] ${
+            strong ? "font-semibold text-[#101828]" : "text-[#4a5565]"
+          }`}
+        >
+          {label}
+        </p>
+        {sub && <p className="text-[11px] text-[#9ca3af] mt-0.5">{sub}</p>}
+      </div>
+      <p
+        className={`shrink-0 tabular-nums ${
+          strong
+            ? "text-[16px] font-bold text-[#101828]"
+            : "text-[13px] font-semibold text-[#101828]"
+        }`}
+      >
+        ${money(amount)}
+        <span className="text-[11px] font-medium text-[#9ca3af] ml-1">
+          {currency}
+        </span>
+      </p>
+    </div>
+  );
+}
+
+function Notice({
+  tone,
+  icon: Icon,
+  title,
+  children,
+}: {
+  tone: "info" | "warning" | "neutral";
+  icon: React.ComponentType<{ className?: string }>;
+  title?: string;
+  children: React.ReactNode;
+}) {
+  const map = {
+    info: "bg-[#EFF6FF] border-[#BFDBFE] text-[#1E40AF]",
+    warning: "bg-[#FFF1F2] border-[#FECDD3] text-[#9F1239]",
+    neutral: "bg-[#F9FAFB] border-[#e9e9e9] text-[#4a5565]",
+  } as const;
+  const iconColor = {
+    info: "text-[#2563EB]",
+    warning: "text-[#E11D48]",
+    neutral: "text-[#6b7280]",
+  } as const;
+
+  return (
+    <div className={`rounded-2xl border px-4 py-3.5 flex gap-3 ${map[tone]}`}>
+      <Icon className={`w-4 h-4 mt-0.5 shrink-0 ${iconColor[tone]}`} />
+      <div className="min-w-0">
+        {title && (
+          <p className="text-[13px] font-semibold leading-tight mb-1">
+            {title}
+          </p>
+        )}
+        <div className="text-[12px] leading-relaxed">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Auto-approval countdown (AC8) ───────────────────────── */
+
+function CountdownCard({ remainingMs }: { remainingMs: number }) {
+  const urgent = remainingMs <= HOUR_MS;
+  return (
+    <div
+      className={`rounded-2xl bg-white border border-[#ececec] border-l-4 px-4 py-3.5 flex items-center gap-3 shadow-[0px_1px_3px_0px_rgba(95,95,95,0.06)] ${
+        urgent ? "border-l-[#E11D48]" : "border-l-[#F89823]"
+      }`}
+      role="status"
+    >
+      <div
+        className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
+          urgent ? "bg-[#FFF1F2]" : "bg-[#FFF3E0]"
+        }`}
+      >
+        <Timer
+          className={`w-5 h-5 ${urgent ? "text-[#E11D48]" : "text-[#D97706]"}`}
+        />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-[13px] font-semibold text-[#101828] leading-tight">
+          {formatReviewRemaining(remainingMs)} left to auto approve the invoice
+        </p>
+        <p className="text-[11px] text-[#6b7280] mt-0.5">
+          No action taken? We approve it and continue the payment workflow.
+        </p>
+      </div>
+      <span
+        className={`text-[13px] font-bold tabular-nums shrink-0 ${
+          urgent ? "text-[#E11D48]" : "text-[#B45309]"
+        }`}
+      >
+        {formatCountdown(remainingMs)}
+      </span>
+    </div>
+  );
+}
+
+/* ── Invoice card (AC2) ──────────────────────────────────── */
+
+function InvoiceCard({
+  invoice,
+  status,
+  displayCurrency,
+  onViewDetails,
+}: {
+  invoice: PilotInvoice;
+  status: InvoiceStatus;
+  displayCurrency: string;
+  onViewDetails: () => void;
+}) {
+  const rate = rateFor(invoice.currency, displayCurrency);
+  const total = rate ? round2(invoice.total * rate) : invoice.total;
+
+  return (
+    <div className={CARD}>
+      <div className="p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[17px] font-bold text-[#101828] leading-tight mt-1 truncate">
+              {invoice.jobNumber}
+            </p>
+            <p className="text-[11px] text-[#9ca3af] mt-0.5">
+              {invoice.jobKind} · {invoice.pricingType}
+            </p>
+          </div>
+          <StatusChip status={status} size="sm" />
+        </div>
+
+        <div className="mt-3.5 pt-3.5 border-t border-gray-100 space-y-2.5">
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-full bg-[#EFF6FF] flex items-center justify-center shrink-0">
+              <User className="w-3.5 h-3.5 text-[#2563EB]" aria-hidden />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[10px] uppercase tracking-wide text-[#9ca3af] leading-none">
+                Pilot Car Driver
+              </p>
+              <p className="text-[13px] font-semibold text-[#101828] truncate mt-0.5">
+                {invoice.pilotDriver}
+              </p>
+            </div>
+          </div>
+
+          {invoice.pilotCompany && (
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-full bg-[#F3F4F6] flex items-center justify-center shrink-0">
+                <Building2 className="w-3.5 h-3.5 text-[#6b7280]" aria-hidden />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[10px] uppercase tracking-wide text-[#9ca3af] leading-none">
+                  Pilot Car Company
+                </p>
+                <p className="text-[13px] font-semibold text-[#101828] truncate mt-0.5">
+                  {invoice.pilotCompany}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="mt-3.5 pt-3.5 border-t border-gray-100 flex items-end justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[11px] text-[#6b7280]">Total Amount Payable</p>
+            <p className="text-[20px] font-bold text-[#101828] tabular-nums leading-tight">
+              ${money(total)}
+              <span className="text-[12px] font-medium text-[#9ca3af] ml-1">
+                {displayCurrency}
+              </span>
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <button
+        onClick={onViewDetails}
+        className="w-full min-h-[48px] px-4 py-3 flex items-center justify-center gap-1.5 border-t border-gray-100 bg-[#FAFAFA] text-[14px] font-semibold text-[#101828] cursor-pointer transition-colors duration-200 hover:bg-[#F3F4F6] active:bg-[#ECECEC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F89823] focus-visible:ring-offset-1"
+        aria-label={`View details for invoice on job ${invoice.jobNumber}`}
+      >
+        View Details
+        <ChevronRight className="w-4 h-4" aria-hidden />
+      </button>
+    </div>
+  );
+}
+
+/* ── Invoice details screen (AC3) ────────────────────────── */
+
+function InvoiceDetails({
+  invoice,
+  status,
+  remainingMs,
+  userRole,
+  displayCurrency,
+  dispute,
+  onBack,
+  onApprove,
+  onDispute,
+}: {
+  invoice: PilotInvoice;
+  status: InvoiceStatus;
+  remainingMs: number;
+  userRole: "individual" | "company";
+  displayCurrency: string;
+  dispute?: DisputeData | null;
+  onBack: () => void;
+  onApprove: () => void;
+  onDispute: () => void;
+}) {
+  const rate = rateFor(invoice.currency, displayCurrency);
+  const convert = (n: number) => (rate ? round2(n * rate) : n);
+
+  const canAct = userRole === "individual" && status === "Pending Review";
+
+  // Portalled to <body> so it covers the Trip Details screen's own fixed
+  // bottom bars, while a later-mounted dispute Sheet still layers above it.
+  return createPortal(
+    <div className="fixed inset-0 z-50 max-w-[450px] mx-auto flex flex-col bg-[#f6f6f6]">
+      {/* Header */}
+      <div className="flex-none bg-white border-b border-[#e6e3df]">
+        <div className="flex items-center h-14 px-2">
+          <button
+            onClick={onBack}
+            aria-label="Back to invoices"
+            className="w-11 h-11 rounded-full flex items-center justify-center cursor-pointer transition-colors duration-200 hover:bg-gray-100 active:bg-gray-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F89823]"
+          >
+            <ChevronLeft className="w-5 h-5 text-[#1a1a1a]" />
+          </button>
+          <div className="flex-1 text-center px-1">
+            <h1 className="text-[16px] font-semibold text-[#101828] leading-tight">
+              Invoice Details
+            </h1>
+            <p className="text-[11px] text-[#6b7280] mt-0.5">
+              {invoice.invoiceNumber}
+            </p>
+          </div>
+          <div className="w-11" />
+        </div>
+      </div>
+
+      {/* Scrollable body */}
+      <div className="flex-1 overflow-y-auto overscroll-contain">
+        <div className="px-4 py-4 space-y-4">
+          {/* AC8 — remaining review period */}
+          {status === "Pending Review" && (
+            <CountdownCard remainingMs={remainingMs} />
+          )}
+
+          {/* AC3 — Invoice Information (read-only) */}
+          <div className={CARD}>
+            <CardHeading icon={Receipt} title="Invoice Information" />
+            <div className="px-4 py-1 divide-y divide-gray-100">
+              <InfoRow label="Job Number" value={invoice.jobNumber} />
+              <InfoRow label="Job Type" value={invoice.jobKind} />
+              <InfoRow label="Pilot Car Driver" value={invoice.pilotDriver} />
+              <InfoRow
+                label="Pilot Car Company"
+                value={invoice.pilotCompany ?? "—"}
+              />
+              <InfoRow label="Pricing Type" value={invoice.pricingType} />
+              <InfoRow label="Invoice Status">
+                <StatusChip status={status} size="sm" />
+              </InfoRow>
+              <InfoRow
+                label="Submitted"
+                value={formatDateTimeBullet(new Date(invoice.submittedAt))}
+              />
+            </div>
+          </div>
+
+          {/* AC3 — Invoice Summary */}
+          <div className={CARD}>
+            <CardHeading
+              icon={Receipt}
+              title="Invoice Summary"
+              tint="#FFF3E0"
+              color="#D97706"
+            />
+            <div className="px-4 py-1">
+              <div className="divide-y divide-gray-100">
+                <MoneyRow
+                  label="Total Job Fee"
+                  amount={convert(invoice.jobFee)}
+                  currency={displayCurrency}
+                />
+                <MoneyRow
+                  label="Transaction Processing Fee"
+                  sub={`${(PROCESSING_RATE * 100).toFixed(1)}% + $${PROCESSING_FIXED.toFixed(2)}`}
+                  amount={convert(invoice.processingFee)}
+                  currency={displayCurrency}
+                />
+                <MoneyRow
+                  label="Platform Fee"
+                  sub={`Overwize ${(PLATFORM_RATE * 100).toFixed(0)}%`}
+                  amount={convert(invoice.platformFee)}
+                  currency={displayCurrency}
+                />
+              </div>
+              <div className="border-t-2 border-gray-100">
+                <MoneyRow
+                  label="Total Amount Payable"
+                  amount={convert(invoice.total)}
+                  currency={displayCurrency}
+                  strong
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* AC12 — currency conversion note */}
+          {rate && (
+            <Notice tone="info" icon={ArrowRightLeft} title="Currency Converted">
+              The invoice amount shown in {displayCurrency} is converted from{" "}
+              {invoice.currency} using an exchange rate of 1 {invoice.currency} ={" "}
+              {rate.toFixed(6)} {displayCurrency}.
+              <span className="block mt-1.5 text-[#1E40AF]/70">
+                Original invoice total: ${money(invoice.total)}{" "}
+                {invoice.currency}
+              </span>
+            </Notice>
+          )}
+
+          {/* Dispute record */}
+          {status === "Payment Disputed" && dispute && (
+            <div className={CARD}>
+              <CardHeading
+                icon={AlertTriangle}
+                title="Dispute Details"
+                tint="#FFF1F2"
+                color="#E11D48"
+              />
+              <div className="px-4 py-3 space-y-3">
+                <div>
+                  <p className="text-[11px] uppercase tracking-wide text-[#9ca3af]">
+                    Reason
+                  </p>
+                  <p className="text-[13px] font-semibold text-[#101828] mt-0.5">
+                    {dispute.reason}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-wide text-[#9ca3af]">
+                    Description
+                  </p>
+                  <p className="text-[13px] text-[#4a5565] mt-0.5 leading-relaxed">
+                    {dispute.description}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-[11px] uppercase tracking-wide text-[#9ca3af]">
+                    Submitted On
+                  </p>
+                  <p className="text-[13px] text-[#4a5565] mt-0.5">
+                    {formatDateTimeBullet(dispute.submittedOn)}
+                  </p>
+                </div>
+                {dispute.evidence.length > 0 && (
+                  <div>
+                    <p className="text-[11px] uppercase tracking-wide text-[#9ca3af]">
+                      Evidence
+                    </p>
+                    <p className="text-[13px] text-[#4a5565] mt-0.5">
+                      {dispute.evidence.length} file
+                      {dispute.evidence.length === 1 ? "" : "s"} attached
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* AC6 — company truck driver read-only message */}
+          {userRole === "company" && status === "Pending Review" && (
+            <Notice tone="neutral" icon={Lock} title="Read-only access">
+              This invoice must be reviewed and approved by your Truck Company
+              Administrator.
+            </Notice>
+          )}
+
+          {/* Resolved-state messaging */}
+          {status === "Payment Completed" && (
+            <Notice tone="info" icon={CheckCircle2} title="Payment Completed">
+              This invoice was approved and the payment has been processed
+              successfully.
+            </Notice>
+          )}
+          {status === "Payment Disputed" && (
+            <Notice tone="warning" icon={AlertTriangle} title="Under Dispute">
+              Payment is on hold while the dispute is reviewed. The pilot car
+              party has been notified.
+            </Notice>
+          )}
+
+          <div className="h-2" />
+        </div>
+      </div>
+
+      {/* AC5 — sticky actions for individual truck drivers */}
+      {canAct && (
+        <div className="flex-none bg-white border-t border-[#e6e3df] px-4 py-3 safe-area-inset-bottom">
+          <div className="flex gap-2.5">
+            <Button
+              onClick={onDispute}
+              variant="outline"
+              className="flex-1 h-12 rounded-[8px] text-[15px] font-semibold bg-white border-[#FECDD3] text-[#E11D48] cursor-pointer transition-colors duration-200 hover:bg-[#FFF1F2] hover:text-[#BE123C] focus-visible:ring-2 focus-visible:ring-[#E11D48]"
+            >
+              <AlertTriangle className="w-4 h-4 mr-1.5" aria-hidden />
+              Raise Dispute
+            </Button>
+            <Button
+              onClick={onApprove}
+              className="flex-1 h-12 rounded-[8px] text-[15px] font-semibold text-[#1a1a1a] cursor-pointer transition-colors duration-200 shadow-[0px_4px_14px_0px_rgba(248,152,35,0.30)] focus-visible:ring-2 focus-visible:ring-[#B45309]"
+              style={{ backgroundColor: ORANGE }}
+            >
+              <Check className="w-4 h-4 mr-1.5" aria-hidden />
+              Approve Invoice
+            </Button>
+          </div>
+        </div>
+      )}
+    </div>,
+    document.body,
+  );
+}
+
+/* ── Main tab ────────────────────────────────────────────── */
 
 export default function InvoiceTabContent({
   relatedJobs,
+  userRole: userRoleProp,
+  payerCurrency = "USD",
+  reviewWindowMs = DAY_MS,
 }: InvoiceTabContentProps) {
-  const [expandedInvoices, setExpandedInvoices] = useState<{
-    [key: string]: boolean;
-  }>({});
-  const [searchQuery, setSearchQuery] = useState("");
-  const [filterStatus, setFilterStatus] = useState<
-    "all" | "paid" | "pending" | "past-due"
-  >("all");
-  const [showHeader, setShowHeader] = useState(true);
-  const [lastScrollY, setLastScrollY] = useState(0);
-  const headerRef = useRef<HTMLDivElement>(null);
-
-  // Invoice management states
-  const [invoiceStatuses, setInvoiceStatuses] = useState<{
-    [key: string]: "Awaiting Review" | "Disputed" | "Accepted" | "Payment Pending" | "Paid";
-  }>({});
-  const [disputeData, setDisputeData] = useState<{
-    [key: string]: DisputeData | null;
-  }>({});
-  const [acceptDialogOpen, setAcceptDialogOpen] = useState(false);
-  const [disputeSheetOpen, setDisputeSheetOpen] = useState(false);
-  const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
-
-  // User role (for demo purposes - in real app, this would come from auth context)
-  const [userRole] = useState<"individual" | "company-invited">("individual");
-
-  // Snackbar context
   const { showSnackbar } = useSnackbar();
 
-  const toggleExpanded = (jobId: string) => {
-    setExpandedInvoices((prev) => ({
-      ...prev,
-      [jobId]: !prev[jobId],
-    }));
-  };
+  // Comes from the auth context in production (AC5 / AC6).
+  const role = userRoleProp ?? "individual";
 
-  // Get invoice status for a job
-  const getInvoiceStatus = (jobId: string) => {
-    return invoiceStatuses[jobId] || "Awaiting Review";
-  };
+  // Freeze "now" at mount so submission timestamps stay stable across renders.
+  const mountedAtRef = useRef(Date.now());
+  const invoices = useMemo(
+    () => buildInvoices(relatedJobs, mountedAtRef.current),
+    [relatedJobs],
+  );
 
-  // Scroll direction detection
+  const [statuses, setStatuses] = useState<Record<string, InvoiceStatus>>({});
+  const [disputes, setDisputes] = useState<Record<string, DisputeData | null>>(
+    {},
+  );
+  const [openInvoice, setOpenInvoice] = useState<string | null>(null);
+  const [disputeSheetFor, setDisputeSheetFor] = useState<string | null>(null);
+  const [notificationFor, setNotificationFor] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  const statusOf = (jobNumber: string): InvoiceStatus =>
+    statuses[jobNumber] ?? "Pending Review";
+
+  const deadlineOf = (invoice: PilotInvoice) =>
+    invoice.submittedAt + reviewWindowMs;
+
+  const pendingCount = invoices.filter(
+    (i) => statusOf(i.jobNumber) === "Pending Review",
+  ).length;
+
+  /* AC9 — tick while anything is pending, auto approve on expiry. */
   useEffect(() => {
-    const handleScroll = () => {
-      const currentScrollY = window.scrollY;
+    if (pendingCount === 0) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [pendingCount]);
 
-      if (currentScrollY < 10) {
-        setShowHeader(true);
-      } else if (currentScrollY > lastScrollY) {
-        // Scrolling down
-        setShowHeader(false);
-      } else {
-        // Scrolling up
-        setShowHeader(true);
-      }
+  useEffect(() => {
+    const expired = invoices.filter(
+      (i) => statusOf(i.jobNumber) === "Pending Review" && deadlineOf(i) <= now,
+    );
+    if (expired.length === 0) return;
 
-      setLastScrollY(currentScrollY);
-    };
-
-    window.addEventListener("scroll", handleScroll, {
-      passive: true,
+    setStatuses((prev) => {
+      const next = { ...prev };
+      expired.forEach((i) => {
+        next[i.jobNumber] = "Payment Completed";
+      });
+      return next;
     });
-    return () =>
-      window.removeEventListener("scroll", handleScroll);
-  }, [lastScrollY]);
-
-  const completedJobs = relatedJobs.filter((job) => {
-    const acceptedBid = job.bids.find(
-      (bid: any) => bid.status === "Accepted",
+    showSnackbar(
+      expired.length === 1
+        ? `Invoice for job ${expired[0].jobNumber} was automatically approved and paid.`
+        : `${expired.length} invoices were automatically approved and paid.`,
+      "info",
+      5000,
     );
-    return acceptedBid?.jobStatus === "Completed";
-  });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [now, invoices]);
 
-  const pendingCount = completedJobs.filter((job) => {
-    const acceptedBid = job.bids.find(
-      (bid: any) => bid.status === "Accepted",
+  /* AC1 / AC7 — a newly submitted invoice surfaces as a push notification. */
+  const firstPending = invoices.find(
+    (i) => statusOf(i.jobNumber) === "Pending Review",
+  );
+  const notifiedRef = useRef(false);
+  useEffect(() => {
+    if (notifiedRef.current || !firstPending) return;
+    notifiedRef.current = true;
+    const id = setTimeout(
+      () => setNotificationFor(firstPending.jobNumber),
+      2500,
     );
-    return !acceptedBid?.invoiceApproved;
-  }).length;
+    return () => clearTimeout(id);
+  }, [firstPending]);
 
-  // Filter and search logic
-  const filteredJobs = completedJobs.filter((job, index) => {
-    const bid = job.bids.find(
-      (bid: any) => bid.status === "Accepted",
+  const active = invoices.find((i) => i.jobNumber === openInvoice) ?? null;
+
+  const handleApprove = (jobNumber: string) => {
+    setStatuses((prev) => ({ ...prev, [jobNumber]: "Payment Completed" }));
+    setOpenInvoice(null);
+    showSnackbar(
+      `Invoice approved. Payment for job ${jobNumber} is being processed.`,
+      "success",
+      4000,
     );
-    if (!bid) return false;
+  };
 
-    // Search filter
-    const matchesSearch =
-      searchQuery === "" ||
-      job.id
-        .toLowerCase()
-        .includes(searchQuery.toLowerCase()) ||
-      job.title
-        ?.toLowerCase()
-        .includes(searchQuery.toLowerCase()) ||
-      bid.companyName
-        ?.toLowerCase()
-        .includes(searchQuery.toLowerCase());
-
-    // Status filter
-    let matchesStatus = true;
-    if (filterStatus === "paid") {
-      matchesStatus = bid.invoiceApproved === true;
-    } else if (filterStatus === "pending") {
-      matchesStatus = !bid.invoiceApproved && index !== 1;
-    } else if (filterStatus === "past-due") {
-      matchesStatus = !bid.invoiceApproved && index === 1;
-    }
-
-    return matchesSearch && matchesStatus;
-  });
-
-  if (completedJobs.length === 0) {
+  /* ── Empty state ── */
+  if (invoices.length === 0) {
     return (
-      <div className="text-center py-12 bg-gray-50 rounded-xl border border-dashed border-gray-200">
-        <Receipt className="h-10 w-10 text-gray-300 mx-auto mb-3" />
-        <p className="text-gray-500 font-medium">
-          No invoices available
-        </p>
-        <p className="text-sm text-gray-400 mt-1">
-          Invoice summaries will appear here when jobs are
-          completed
-        </p>
+      <div className="px-4 py-14">
+        <div className="flex flex-col items-center text-center">
+          <div className="w-16 h-16 rounded-full bg-white border border-[#ececec] flex items-center justify-center shadow-[0px_1px_3px_0px_rgba(95,95,95,0.06)]">
+            <Receipt className="w-7 h-7 text-[#c9ccd1]" aria-hidden />
+          </div>
+          <p className="text-[15px] font-semibold text-[#101828] mt-4">
+            No invoices submitted yet
+          </p>
+          <p className="text-[13px] text-[#6b7280] mt-1.5 max-w-[280px] leading-relaxed">
+            Invoices appear here automatically as soon as a pilot car driver or
+            company submits one for this trip.
+          </p>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="w-full min-w-0">
-      {/* Sticky Header with Search and Filter */}
-      <div
-        ref={headerRef}
-        className={`sticky top-0 z-20 bg-white border-b border-gray-200 transition-transform duration-300 ${
-          showHeader ? "translate-y-0" : "-translate-y-full"
-        }`}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3">
-          <h2 className="text-lg font-semibold text-gray-900">
-            Invoices
-          </h2>
-          {pendingCount > 0 && (
-            <Badge className="bg-red-100 text-red-700 border-0 text-xs px-2 py-0.5">
-              {pendingCount} Pending
-            </Badge>
-          )}
-        </div>
-
-        {/* Search Bar and Filter Dropdown */}
-        <div className="px-4 pb-3">
-          <div className="flex gap-2">
-            <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <Input
-                type="text"
-                placeholder="Search invoices..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10 pr-10 h-10 bg-gray-50 border-gray-200"
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery("")}
-                  className="absolute right-3 top-1/2 transform -translate-y-1/2"
-                >
-                  <X className="w-4 h-4 text-gray-400 hover:text-gray-600" />
-                </button>
-              )}
-            </div>
-
-            <Select
-              value={filterStatus}
-              onValueChange={(value: any) =>
-                setFilterStatus(value)
-              }
-            >
-              <SelectTrigger className="w-[120px] h-10 bg-gray-50 border-gray-200">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">
-                  All ({completedJobs.length})
-                </SelectItem>
-                <SelectItem value="pending">
-                  Pending ({pendingCount})
-                </SelectItem>
-                <SelectItem value="paid">
-                  Paid (
-                  {
-                    completedJobs.filter(
-                      (_, i) =>
-                        completedJobs.findIndex(
-                          (j) =>
-                            j.bids.find(
-                              (b: any) =>
-                                b.status === "Accepted",
-                            )?.invoiceApproved,
-                        ) === i,
-                    ).length
-                  }
-                  )
-                </SelectItem>
-                <SelectItem value="past-due">
-                  Past Due
-                </SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      </div>
-
-      {/* Consolidated Total Summary */}
-      <div className="px-4 py-4 bg-gradient-to-br from-blue-50 to-indigo-50 border-b border-gray-200">
-        <div className="max-w-2xl mx-auto">
-          <div className="text-center space-y-2">
-            <p className="text-sm font-medium text-gray-600">
-              Total Invoice Amount
-            </p>
-            <p className="font-bold text-gray-900 text-[24px]">
-              $
-              {completedJobs
-                .reduce((total, job) => {
-                  const bid = job.bids.find(
-                    (bid: any) => bid.status === "Accepted",
-                  );
-                  if (!bid) return total;
-
-                  const distance = parseFloat(
-                    job.route?.replace(" km", "") || "0",
-                  );
-                  const baseRate = 1.5;
-                  const waitingHours = 3;
-                  const waitingRate = 45;
-                  const layoverDays = 1;
-                  const layoverRate = 150;
-                  const overtimeHours = 2;
-                  const overtimeRate = 60;
-
-                  const totalAmount =
-                    distance * baseRate +
-                    waitingHours * waitingRate +
-                    layoverDays * layoverRate +
-                    overtimeHours * overtimeRate;
-
-                  return total + totalAmount;
-                }, 0)
-                .toLocaleString("en-US", {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}
-            </p>
-            <div className="flex items-center justify-center gap-4 text-xs text-gray-600 pt-2">
-              <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-full bg-yellow-500"></div>
-                <span>{pendingCount} Pending</span>
+      {/* AC1 — push notification entry point */}
+      {notificationFor && !openInvoice && (
+        <div className="px-4 pt-4">
+          <div className="rounded-2xl bg-white border border-[#ececec] shadow-[0px_4px_16px_0px_rgba(16,24,40,0.08)] overflow-hidden">
+            <div className="p-3.5 flex gap-3">
+              <div className="w-9 h-9 rounded-xl bg-[#FFF3E0] flex items-center justify-center shrink-0">
+                <Bell className="w-4 h-4 text-[#D97706]" aria-hidden />
               </div>
-              <div className="flex items-center gap-1.5">
-                <div className="w-2 h-2 rounded-full bg-green-500"></div>
-                <span>
-                  {
-                    completedJobs.filter((job) => {
-                      const bid = job.bids.find(
-                        (b: any) => b.status === "Accepted",
-                      );
-                      return bid?.invoiceApproved;
-                    }).length
-                  }{" "}
-                  Paid
-                </span>
+              <div className="flex-1 min-w-0">
+                <p className="text-[14px] font-bold text-[#101828] leading-tight">
+                  Invoice Ready for Review
+                </p>
+                <p className="text-[12px] text-[#6b7280] leading-relaxed mt-1">
+                  An invoice for job {notificationFor} has been submitted.
+                  Review it before the window closes, or it approves
+                  automatically.
+                </p>
               </div>
-              <div className="flex items-center gap-1.5">
-                <Receipt className="w-3 h-3 text-gray-500" />
-                <span>{completedJobs.length} Total</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Invoice List */}
-      <div className="p-4 space-y-3">
-        {filteredJobs.length === 0 ? (
-          <div className="text-center py-12 bg-gray-50 rounded-xl border border-dashed border-gray-200">
-            <Search className="h-10 w-10 text-gray-300 mx-auto mb-3" />
-            <p className="text-gray-500 font-medium">
-              No invoices found
-            </p>
-            <p className="text-sm text-gray-400 mt-1">
-              Try adjusting your search or filters
-            </p>
-          </div>
-        ) : (
-          filteredJobs.map((job, index) => {
-            const bid = job.bids.find(
-              (bid: any) => bid.status === "Accepted",
-            );
-            if (!bid) return null;
-
-            // Calculate total with fees and tax
-            const baseRate = 2.5;
-            const waitingRate = 50.0;
-            const layoverRate = 200.0;
-            const overtimeRate = 75.0;
-            const distance = parseInt(
-              job.route?.replace(" km", "") || "0",
-            );
-            const waitingHours = 4.5;
-            const layoverDays = 3;
-            const overtimeHours = 6.0;
-            
-            const serviceCost =
-              distance * baseRate +
-              waitingHours * waitingRate +
-              layoverDays * layoverRate +
-              overtimeHours * overtimeRate;
-            const serviceFee = serviceCost * 0.05; // 5% Overwize fee
-            const tax = (serviceCost + serviceFee) * 0.13; // 13% tax
-            const netAmount = serviceCost + serviceFee + tax;
-
-            // Get invoice status
-            const invoiceStatus = getInvoiceStatus(job.id);
-            const jobDisputeData = disputeData[job.id];
-
-            // Status badge configuration
-            const getStatusBadge = () => {
-              switch (invoiceStatus) {
-                case "Awaiting Review":
-                  return {
-                    text: "⚠ Awaiting Review",
-                    className: "bg-yellow-100 text-yellow-700 border-0",
-                  };
-                case "Accepted":
-                  return {
-                    text: "✔ Accepted",
-                    className: "bg-green-100 text-green-700 border-0",
-                  };
-                case "Payment Pending":
-                  return {
-                    text: "💰 Payment Pending",
-                    className: "bg-blue-100 text-blue-700 border-0",
-                  };
-                case "Disputed":
-                  return {
-                    text: "⚠ Disputed",
-                    className: "bg-orange-100 text-orange-700 border-0",
-                  };
-                case "Paid":
-                  return {
-                    text: "✔ Paid",
-                    className: "bg-green-100 text-green-700 border-0",
-                  };
-                default:
-                  return {
-                    text: "Draft",
-                    className: "bg-gray-100 text-gray-700 border-0",
-                  };
-              }
-            };
-
-            const statusBadge = getStatusBadge();
-            const isExpanded =
-              expandedInvoices[job.id] || false;
-
-            return (
-              <div
-                key={job.id}
-                className="bg-white border border-gray-200 rounded-xl overflow-hidden hover:shadow-sm transition-shadow"
+              <button
+                onClick={() => setNotificationFor(null)}
+                aria-label="Dismiss notification"
+                className="w-8 h-8 -mt-1 -mr-1 rounded-full flex items-center justify-center shrink-0 cursor-pointer transition-colors duration-200 hover:bg-gray-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F89823]"
               >
-                {/* Main Invoice Card - Summary View */}
-                <div className="p-3">
-                  {/* Invoice Icon */}
-                  <div className="flex justify-center mb-2">
-                    <div className="relative w-10 h-10 bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg flex items-center justify-center">
-                      <div className="absolute inset-0 bg-white/40 rounded-lg" />
-                      <Receipt className="w-5 h-5 text-blue-500 relative z-10" />
-                      <div className="absolute bottom-1 right-1 w-4 h-4 bg-blue-500 rounded flex items-center justify-center">
-                        <span className="text-white text-[8px] font-bold">
-                          $
-                        </span>
-                      </div>
-                    </div>
-                  </div>
+                <X className="w-4 h-4 text-[#9ca3af]" />
+              </button>
+            </div>
+            <button
+              onClick={() => {
+                setOpenInvoice(notificationFor);
+                setNotificationFor(null);
+              }}
+              className="w-full min-h-[44px] px-4 py-2.5 border-t border-gray-100 text-[14px] font-semibold text-[#1a1a1a] cursor-pointer transition-colors duration-200 hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#B45309]"
+              style={{ backgroundColor: ORANGE }}
+            >
+              Review Invoice
+            </button>
+          </div>
+        </div>
+      )}
 
-                  {/* Amount - Centered */}
-                  <div className="text-center mb-0.5">
-                    <h3 className="text-lg font-bold text-gray-900">
-                      {netAmount.toLocaleString("en-US", {
-                        minimumFractionDigits: 2,
-                        maximumFractionDigits: 2,
-                      })}{" "}
-                      USD
-                    </h3>
-                  </div>
-
-                  {/* Invoice Number - Centered */}
-                  <div className="text-center mb-3">
-                    <p className="text-xs text-gray-500">
-                      No. {job.id}
-                    </p>
-                  </div>
-
-                  {/* Divider */}
-                  <div className="border-t border-gray-200 my-2" />
-
-                  {/* Two Column Summary */}
-                  <div className="space-y-1.5">
-                    {/* Status Row */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-600">
-                        Status
-                      </span>
-                      <Badge
-                        className={`text-xs px-2.5 py-0.5 ${statusBadge.className}`}
-                      >
-                        {statusBadge.text}
-                      </Badge>
-                    </div>
-
-                    {/* Payment Date Row */}
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-gray-600">
-                        Payment Date
-                      </span>
-                      <span className="text-xs font-medium text-gray-900">
-                        {invoiceStatus === "Paid"
-                          ? `Paid at ${formatDate(job.endDate)}`
-                          : "Pending"}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Expand Button */}
-                  <div className="mt-2 pt-2 border-t border-gray-200">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="w-full text-gray-600 hover:text-gray-900 hover:bg-gray-50 h-8"
-                      onClick={() => toggleExpanded(job.id)}
-                    >
-                      <span className="text-xs font-medium">
-                        {isExpanded
-                          ? "Hide Details"
-                          : "View Details"}
-                      </span>
-                      <ChevronDown
-                        className={`w-3.5 h-3.5 ml-2 transition-transform ${isExpanded ? "rotate-180" : ""}`}
-                      />
-                    </Button>
-                  </div>
-                </div>
-
-                {/* Expandable Details Section */}
-                {isExpanded && (
-                  <div className="border-t border-gray-200 bg-white p-4 space-y-4">
-                    {/* Company Info */}
-                    <div>
-                      <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">
-                        Company Information
-                      </h4>
-                      <div className="bg-gray-50 rounded-lg p-4 space-y-3 text-sm">
-                        <div>
-                          <div className="text-xs text-gray-500 mb-0.5">
-                            Company
-                          </div>
-                          <div className="font-medium text-gray-900">
-                            {bid.companyName}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-xs text-gray-500 mb-0.5">
-                            Email
-                          </div>
-                          <div className="font-medium text-gray-900 break-all">
-                            {bid.companyEmail ||
-                              `${bid.companyName}@example.com`}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Job Info */}
-                    <div>
-                      <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">
-                        Job Details
-                      </h4>
-                      <div className="bg-gray-50 rounded-lg p-4 space-y-3 text-sm">
-                        <div>
-                          <div className="text-xs text-gray-500 mb-0.5">
-                            Route
-                          </div>
-                          <div className="font-medium text-gray-900">
-                            {job.origin} → {job.destination}
-                          </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <div className="text-xs text-gray-500 mb-0.5">
-                              Distance
-                            </div>
-                            <div className="font-medium text-gray-900">
-                              {distance} km
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-xs text-gray-500 mb-0.5">
-                              Vehicle Type
-                            </div>
-                            <div className="font-medium text-gray-900">
-                              {job.vehicleType}
-                            </div>
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-xs text-gray-500 mb-0.5">
-                            Subject
-                          </div>
-                          <div className="font-medium text-gray-900">
-                            {job.title || job.description}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Invoice Dates */}
-                    <div>
-                      <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">
-                        Invoice Timeline
-                      </h4>
-                      <div className="bg-gray-50 rounded-lg p-4 space-y-3 text-sm">
-                        <div>
-                          <div className="text-xs text-gray-500 mb-0.5">
-                            Created
-                          </div>
-                          <div className="font-medium text-gray-900">
-                            {formatDateTimeBullet(
-                              job.startDate,
-                            )}
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-xs text-gray-500 mb-0.5">
-                            Last Updated
-                          </div>
-                          <div className="font-medium text-gray-900">
-                            {formatDateTimeBullet(job.endDate)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Itemized Charges */}
-                    <div>
-                      <h4 className="text-xs font-semibold text-gray-700 uppercase tracking-wide mb-3">
-                        Itemized Charges
-                      </h4>
-                      <div className="bg-gray-50 rounded-lg p-4 space-y-3 text-sm">
-                        <div className="space-y-2">
-                          <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                            Base Charges
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span className="text-gray-600">
-                              Mileage{" "}
-                              <span className="text-gray-400">
-                                ({distance} km @ ${baseRate}/km)
-                              </span>
-                            </span>
-                            <span className="font-medium text-gray-900 tabular-nums">
-                              ${(distance * baseRate).toFixed(2)}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span className="text-gray-600">
-                              Waiting Time{" "}
-                              <span className="text-gray-400">
-                                ({waitingHours}h @ ${waitingRate}/h)
-                              </span>
-                            </span>
-                            <span className="font-medium text-gray-900 tabular-nums">
-                              ${(waitingHours * waitingRate).toFixed(2)}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span className="text-gray-600">
-                              Layover{" "}
-                              <span className="text-gray-400">
-                                ({layoverDays} days @ ${layoverRate}/day)
-                              </span>
-                            </span>
-                            <span className="font-medium text-gray-900 tabular-nums">
-                              ${(layoverDays * layoverRate).toFixed(2)}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span className="text-gray-600">
-                              Overtime{" "}
-                              <span className="text-gray-400">
-                                ({overtimeHours}h @ ${overtimeRate}/h)
-                              </span>
-                            </span>
-                            <span className="font-medium text-gray-900 tabular-nums">
-                              ${(overtimeHours * overtimeRate).toFixed(2)}
-                            </span>
-                          </div>
-                        </div>
-
-                        <Separator className="my-3" />
-
-                        {/* Summary Section */}
-                        <div className="space-y-2">
-                          <div className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                            Summary
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span className="text-gray-600">Service Cost</span>
-                            <span className="font-medium text-gray-900 tabular-nums">
-                              ${serviceCost.toFixed(2)}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span className="text-gray-600">Overwize Service Fee (5%)</span>
-                            <span className="font-medium text-gray-900 tabular-nums">
-                              ${serviceFee.toFixed(2)}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between gap-4">
-                            <span className="text-gray-600">Tax (13%)</span>
-                            <span className="font-medium text-gray-900 tabular-nums">
-                              ${tax.toFixed(2)}
-                            </span>
-                          </div>
-                        </div>
-
-                        <Separator className="my-3" />
-
-                        {/* Net Amount Payable - Prominent */}
-                        <div className="bg-blue-50 rounded-lg p-3 border border-blue-200">
-                          <div className="flex items-center justify-between gap-4">
-                            <span className="font-bold text-blue-900 text-base">
-                              Net Amount Payable
-                            </span>
-                            <span className="font-bold text-blue-900 text-xl tabular-nums">
-                              ${netAmount.toFixed(2)}
-                            </span>
-                          </div>
-                        </div>
-
-                        {/* System Note */}
-                        <div className="flex items-start gap-2 p-3 bg-blue-50 rounded-lg border border-blue-200 mt-3">
-                          <Info className="w-4 h-4 text-blue-600 mt-0.5 flex-shrink-0" />
-                          <p className="text-xs text-blue-900">
-                            Grace period applies for waiting time
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Payment Information Banner (for Accepted/Payment Pending status) */}
-                    {(invoiceStatus === "Accepted" || invoiceStatus === "Payment Pending") && (
-                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 flex items-start gap-3">
-                        <Info className="w-5 h-5 text-blue-600 mt-0.5 flex-shrink-0" />
-                        <div>
-                          <p className="text-sm font-semibold text-blue-900 mb-1">
-                            Payment Required
-                          </p>
-                          <p className="text-sm text-blue-800">
-                            Payment must be completed through the Web Portal. Please log in to your account on the web to proceed with payment.
-                          </p>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Dispute Details Section (Show when disputed) */}
-                    {invoiceStatus === "Disputed" && jobDisputeData && (
-                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 space-y-3">
-                        <h4 className="text-xs font-semibold text-amber-900 uppercase tracking-wide flex items-center gap-2">
-                          <AlertTriangle className="w-4 h-4" />
-                          Dispute Details
-                        </h4>
-                        <div className="space-y-2 text-sm">
-                          <div>
-                            <div className="text-xs text-amber-700 font-medium mb-1">
-                              Reason
-                            </div>
-                            <div className="text-amber-900">
-                              {jobDisputeData.reason}
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-xs text-amber-700 font-medium mb-1">
-                              Description
-                            </div>
-                            <div className="text-amber-900">
-                              {jobDisputeData.description}
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-xs text-amber-700 font-medium mb-1">
-                              Submitted On
-                            </div>
-                            <div className="text-amber-900">
-                              {formatDateTimeBullet(jobDisputeData.submittedOn)}
-                            </div>
-                          </div>
-                          {jobDisputeData.evidence.length > 0 && (
-                            <div>
-                              <div className="text-xs text-amber-700 font-medium mb-1">
-                                Evidence Attached
-                              </div>
-                              <div className="text-amber-900">
-                                {jobDisputeData.evidence.length} file(s)
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Action Buttons - Role-Based Visibility */}
-                    {userRole === "individual" && invoiceStatus === "Awaiting Review" && (
-                      <div className="flex flex-col gap-3 pt-2">
-                        <Button 
-                          className="w-full bg-green-600 hover:bg-green-700 text-white h-12 font-semibold shadow-sm"
-                          onClick={() => {
-                            setSelectedJobId(job.id);
-                            setAcceptDialogOpen(true);
-                          }}
-                        >
-                          <CheckCircle className="w-5 h-5 mr-2" />
-                          Accept Invoice
-                        </Button>
-                        <Button
-                          variant="outline"
-                          className="w-full h-12 border-2 border-red-200 text-red-600 hover:bg-red-50 hover:border-red-300 font-semibold"
-                          onClick={() => {
-                            setSelectedJobId(job.id);
-                            setDisputeSheetOpen(true);
-                          }}
-                        >
-                          <AlertTriangle className="w-5 h-5 mr-2" />
-                          Raise Dispute
-                        </Button>
-                      </div>
-                    )}
-
-                    {/* Read-only view for company-invited drivers */}
-                    {userRole === "company-invited" && invoiceStatus === "Awaiting Review" && (
-                      <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-center">
-                        <Info className="w-5 h-5 text-gray-400 mx-auto mb-2" />
-                        <p className="text-sm text-gray-600">
-                          You have view-only access to this invoice.
-                        </p>
-                        <p className="text-xs text-gray-500 mt-1">
-                          Contact the trip owner for invoice actions.
-                        </p>
-                      </div>
-                    )}
-
-                    {/* Show message when invoice is disputed */}
-                    {invoiceStatus === "Disputed" && (
-                      <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-center">
-                        <p className="text-sm text-gray-600">
-                          This invoice is currently under dispute and cannot be modified.
-                        </p>
-                      </div>
-                    )}
-
-                    {/* Accepted/Paid status message */}
-                    {(invoiceStatus === "Accepted" || invoiceStatus === "Paid") && (
-                      <div className="bg-gray-50 border border-gray-200 rounded-lg p-4 text-center">
-                        <CheckCircle className="w-6 h-6 text-green-600 mx-auto mb-2" />
-                        <p className="text-sm font-semibold text-gray-900">
-                          {invoiceStatus === "Paid" ? "Invoice Paid" : "Invoice Accepted"}
-                        </p>
-                        <p className="text-xs text-gray-500 mt-1">
-                          {invoiceStatus === "Paid" 
-                            ? "Payment has been processed successfully." 
-                            : "Awaiting payment completion on the web portal."}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })
-        )}
+      {/* Header */}
+      <div className="px-4 pt-4 pb-1">
+        <h2 className="text-[17px] font-bold text-[#101828] leading-tight">
+          Invoices
+        </h2>
       </div>
 
-      {/* Accept Invoice Confirmation Dialog */}
-      <Dialog open={acceptDialogOpen} onOpenChange={setAcceptDialogOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-xl font-bold text-gray-900">
-              Accept Invoice
-            </DialogTitle>
-            <DialogDescription className="text-sm text-gray-600 mt-2">
-              By accepting this invoice, you confirm the charges are accurate.
-              Payment must be completed through the Web Portal.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter className="flex flex-col-reverse sm:flex-row gap-3 mt-6">
-            <Button
-              variant="outline"
-              onClick={() => setAcceptDialogOpen(false)}
-              className="w-full sm:w-auto h-11"
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={() => {
-                if (selectedJobId) {
-                  setInvoiceStatuses(prev => ({
-                    ...prev,
-                    [selectedJobId]: "Payment Pending"
-                  }));
-                  setAcceptDialogOpen(false);
-                  showSnackbar(
-                    "Invoice accepted successfully. Please complete payment via Web Portal.",
-                    "success"
-                  );
-                }
-              }}
-              className="w-full sm:w-auto bg-green-600 hover:bg-green-700 text-white h-11 font-semibold"
-            >
-              <CheckCircle className="w-4 h-4 mr-2" />
-              Confirm
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* AC6 — company drivers cannot act on any invoice */}
+      {role === "company" && pendingCount > 0 && (
+        <div className="px-4 pt-3">
+          <Notice tone="neutral" icon={Lock}>
+            This invoice must be reviewed and approved by your Truck Company
+            Administrator.
+          </Notice>
+        </div>
+      )}
 
-      {/* Raise Dispute Sheet */}
-      {selectedJobId && (
+      {/* AC2 — one card per submitted invoice */}
+      <div className="px-4 py-4 space-y-3">
+        {invoices.map((invoice) => (
+          <InvoiceCard
+            key={invoice.jobNumber}
+            invoice={invoice}
+            status={statusOf(invoice.jobNumber)}
+            displayCurrency={payerCurrency}
+            onViewDetails={() => setOpenInvoice(invoice.jobNumber)}
+          />
+        ))}
+      </div>
+
+      {/* AC3 — details screen */}
+      {active && (
+        <InvoiceDetails
+          invoice={active}
+          status={statusOf(active.jobNumber)}
+          remainingMs={Math.max(0, deadlineOf(active) - now)}
+          userRole={role}
+          displayCurrency={payerCurrency}
+          dispute={disputes[active.jobNumber]}
+          onBack={() => setOpenInvoice(null)}
+          onApprove={() => handleApprove(active.jobNumber)}
+          onDispute={() => setDisputeSheetFor(active.jobNumber)}
+        />
+      )}
+
+      {/* AC10 — dispute workflow */}
+      {disputeSheetFor !== null && (
         <RaiseDisputeSheet
-          open={disputeSheetOpen}
-          onOpenChange={setDisputeSheetOpen}
-          jobId={selectedJobId}
+          open
+          onOpenChange={(open) => {
+            if (!open) setDisputeSheetFor(null);
+          }}
+          jobId={disputeSheetFor}
           onDisputeSubmitted={(data) => {
-            setDisputeData(prev => ({
+            const jobNumber = disputeSheetFor;
+            setDisputes((prev) => ({ ...prev, [jobNumber]: data }));
+            setStatuses((prev) => ({
               ...prev,
-              [selectedJobId]: data
-            }));
-            setInvoiceStatuses(prev => ({
-              ...prev,
-              [selectedJobId]: "Disputed"
+              [jobNumber]: "Payment Disputed",
             }));
           }}
         />
