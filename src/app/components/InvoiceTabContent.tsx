@@ -355,39 +355,96 @@ function Notice({
 
 /* ── Auto-approval countdown (AC8) ───────────────────────── */
 
-function CountdownCard({ remainingMs }: { remainingMs: number }) {
+/** Remaining review time as a value/unit pair for the ring centre. */
+function remainingParts(ms: number): { value: string; unit: string } {
+  if (ms <= 0) return { value: "0", unit: "min" };
+  const totalMinutes = Math.floor(ms / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  if (hours >= 1) return { value: String(hours), unit: hours === 1 ? "hr" : "hrs" };
+  return { value: String(totalMinutes), unit: "min" };
+}
+
+function CountdownCard({
+  remainingMs,
+  windowMs,
+}: {
+  remainingMs: number;
+  windowMs: number;
+}) {
   const urgent = remainingMs <= HOUR_MS;
+  const accent = urgent ? "#E11D48" : ORANGE;
+
+  const size = 52;
+  const stroke = 4;
+  const radius = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const fraction = Math.max(0, Math.min(1, remainingMs / windowMs));
+  const { value, unit } = remainingParts(remainingMs);
+
   return (
     <div
-      className={`rounded-2xl bg-white border border-[#ececec] border-l-4 px-4 py-3.5 flex items-center gap-3 shadow-[0px_1px_3px_0px_rgba(95,95,95,0.06)] ${
-        urgent ? "border-l-[#E11D48]" : "border-l-[#F89823]"
-      }`}
+      className="rounded-2xl border px-4 py-3.5 flex items-center gap-3.5"
+      style={{
+        background: urgent
+          ? "linear-gradient(135deg, #FFF1F2 0%, #FFFFFF 68%)"
+          : "linear-gradient(135deg, #FFF3E4 0%, #FFFFFF 68%)",
+        borderColor: urgent ? "#FECDD3" : "#FBE0C0",
+      }}
       role="status"
     >
+      {/* Round progress — remaining share of the review window */}
       <div
-        className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 ${
-          urgent ? "bg-[#FFF1F2]" : "bg-[#FFF3E0]"
-        }`}
+        className="relative shrink-0"
+        style={{ width: size, height: size }}
+        aria-hidden
       >
-        <Timer
-          className={`w-5 h-5 ${urgent ? "text-[#E11D48]" : "text-[#D97706]"}`}
-        />
+        <svg width={size} height={size} className="-rotate-90">
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke={urgent ? "#FBD5DA" : "#F6E2C8"}
+            strokeWidth={stroke}
+          />
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke={accent}
+            strokeWidth={stroke}
+            strokeLinecap="round"
+            strokeDasharray={circumference}
+            strokeDashoffset={circumference * (1 - fraction)}
+            className="transition-[stroke-dashoffset] duration-500 motion-reduce:transition-none"
+          />
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
+          <span
+            className="text-[15px] font-bold tabular-nums"
+            style={{ color: urgent ? "#E11D48" : "#101828" }}
+          >
+            {value}
+          </span>
+          <span className="text-[8px] font-semibold uppercase tracking-wide text-[#9ca3af] mt-0.5">
+            {unit}
+          </span>
+        </div>
       </div>
+
       <div className="flex-1 min-w-0">
-        <p className="text-[13px] font-semibold text-[#101828] leading-tight">
+        <p className="text-[13px] font-semibold text-[#101828] leading-snug">
           {formatReviewRemaining(remainingMs)} left to auto approve the invoice
         </p>
-        <p className="text-[11px] text-[#6b7280] mt-0.5">
-          No action taken? We approve it and continue the payment workflow.
+        <p
+          className="text-[11px] mt-1 tabular-nums"
+          style={{ color: urgent ? "#BE123C" : "#B45309" }}
+        >
+          {formatCountdown(remainingMs)} of a{" "}
+          {Math.round(windowMs / HOUR_MS)}-hour review window
         </p>
       </div>
-      <span
-        className={`text-[13px] font-bold tabular-nums shrink-0 ${
-          urgent ? "text-[#E11D48]" : "text-[#B45309]"
-        }`}
-      >
-        {formatCountdown(remainingMs)}
-      </span>
     </div>
   );
 }
@@ -486,6 +543,7 @@ function InvoiceDetails({
   invoice,
   status,
   remainingMs,
+  reviewWindowMs,
   userRole,
   displayCurrency,
   dispute,
@@ -496,6 +554,7 @@ function InvoiceDetails({
   invoice: PilotInvoice;
   status: InvoiceStatus;
   remainingMs: number;
+  reviewWindowMs: number;
   userRole: "individual" | "company";
   displayCurrency: string;
   dispute?: DisputeData | null;
@@ -539,7 +598,10 @@ function InvoiceDetails({
         <div className="px-4 py-4 space-y-4">
           {/* AC8 — remaining review period */}
           {status === "Pending Review" && (
-            <CountdownCard remainingMs={remainingMs} />
+            <CountdownCard
+              remainingMs={remainingMs}
+              windowMs={reviewWindowMs}
+            />
           )}
 
           {/* AC3 — Invoice Information (read-only) */}
@@ -868,6 +930,7 @@ export default function InvoiceTabContent({
           invoice={active}
           status={statusOf(active.jobNumber)}
           remainingMs={Math.max(0, deadlineOf(active) - now)}
+          reviewWindowMs={reviewWindowMs}
           userRole={role}
           displayCurrency={payerCurrency}
           dispute={disputes[active.jobNumber]}
