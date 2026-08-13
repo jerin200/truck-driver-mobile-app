@@ -8,8 +8,14 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Download,
+  FileText,
+  Globe,
   Hash,
+  History,
+  Image as ImageIcon,
   Lock,
+  Paperclip,
   Receipt,
   Timer,
   User,
@@ -18,6 +24,12 @@ import { Button } from "./ui/button";
 import RaiseDisputeSheet, { DisputeData } from "./RaiseDisputeSheet";
 import { useSnackbar } from "../contexts/SnackbarContext";
 import { formatDateTimeBullet } from "../utils/dateFormat";
+import {
+  downloadEvidence,
+  EvidenceItem,
+  extensionOf,
+  fromFiles,
+} from "../utils/evidenceFiles";
 
 /* ============================================================
  * Truck Driver · Review Pilot Car Invoices (Trip Details → Invoice tab)
@@ -34,6 +46,12 @@ import { formatDateTimeBullet } from "../utils/dateFormat";
  * AC10 Raise Dispute workflow
  * AC11 Same lifecycle for Flat Rate / Per Mile / Per Hour
  * AC12 Amounts shown in the payer's default currency
+ *
+ * Revised invoice (view after resubmission)
+ * R-AC1 A resubmitted invoice replaces the disputed one at Pending Review
+ * R-AC2 Updated Charges · Platform Fee · Invoice Total · Net Payable ·
+ *       Supporting Evidence · Invoice Status are all shown
+ * R-AC3 Read-only — no further dispute and no payment from the mobile app
  * ============================================================ */
 
 const ORANGE = "#F89823";
@@ -50,6 +68,19 @@ const EXCHANGE_RATES: Record<string, number> = {
   "CAD>USD": 0.705667,
   "USD>CAD": 1.4171,
 };
+
+/**
+ * How long the pilot car party takes to resubmit after a dispute. Mocked here
+ * so the revised invoice can be seen end to end; in production it arrives from
+ * the invoice service (and its push notification) whenever they resubmit.
+ */
+const REVISION_DELAY_MS = 6000;
+
+/**
+ * Share of the original job fee that was billed as standby time — the line the
+ * pilot car party withdraws when it resubmits.
+ */
+const STANDBY_SHARE = 0.125;
 
 export type InvoiceStatus =
   | "Pending Review"
@@ -70,6 +101,40 @@ export interface PilotInvoice {
   platformFee: number;
   total: number;
   submittedAt: number;
+}
+
+/** One line of the resubmitted invoice, carrying what it used to be. */
+export interface RevisedCharge {
+  label: string;
+  sub?: string;
+  amount: number;
+  /** Amount on the disputed invoice, when this line changed. */
+  previousAmount?: number;
+}
+
+/**
+ * Invoice resubmitted by the Pilot Car Driver or Pilot Car Company
+ * Administrator after the truck driver disputed the original one. Read-only on
+ * mobile — payment is completed through the web portal.
+ */
+export interface RevisedInvoice {
+  invoiceNumber: string;
+  /** Invoice number this revision replaces. */
+  revisionOf: string;
+  revisionNumber: number;
+  submittedAt: number;
+  revisedBy: string;
+  revisedByRole: "Pilot Car Driver" | "Pilot Car Company Administrator";
+  charges: RevisedCharge[];
+  chargesTotal: number;
+  processingFee: number;
+  platformFee: number;
+  /** Payable by the truck driver. */
+  total: number;
+  /** Total on the disputed invoice, for the before/after comparison. */
+  previousTotal: number;
+  /** Owed to the pilot car party once Overwize fees are settled. */
+  netPayable: number;
 }
 
 interface InvoiceTabContentProps {
@@ -139,6 +204,42 @@ const INVOICE_CURRENCY: Record<string, string> = {
 const DEFAULT_INVOICE_CURRENCY = "USD";
 
 /**
+ * Invoices already disputed and resubmitted before the driver opened the app.
+ * Keeps the Home "Disputed Invoices" widget and this tab telling one story; in
+ * production the dispute and its revision both come from the invoice service.
+ */
+const SEEDED_DISPUTES: Record<
+  string,
+  { dispute: DisputeData; evidence: EvidenceItem[] }
+> = {
+  "JOB-103": {
+    dispute: {
+      reason: "Extra charges",
+      description:
+        "Standby time was billed for the overnight layover in Florence, SC, " +
+        "but the escort was released for the night at 19:40. Please remove " +
+        "the standby line and reissue the invoice.",
+      evidence: [],
+      submittedOn: new Date(Date.now() - 26 * HOUR_MS).toISOString(),
+    },
+    evidence: [
+      {
+        id: "JOB-103-dispute-release",
+        name: "escort-release-confirmation.pdf",
+        kind: "document",
+        size: "184 KB",
+      },
+      {
+        id: "JOB-103-dispute-photo",
+        name: "layover-parking-19-42.jpg",
+        kind: "photo",
+        size: "2.1 MB",
+      },
+    ],
+  },
+};
+
+/**
  * Builds the submitted-invoice list for the trip. Only jobs whose pilot car
  * party has submitted an invoice are included (AC2) — here, jobs with an
  * accepted bid. In production this comes from the invoice service.
@@ -175,6 +276,62 @@ function buildInvoices(relatedJobs: any[], now: number): PilotInvoice[] {
         submittedAt: now - (6 + index * 3) * HOUR_MS,
       };
     });
+}
+
+/**
+ * Builds the invoice the pilot car party resubmits after a dispute. The
+ * disputed standby line is withdrawn, the escort service fee stands, and every
+ * fee is recalculated off the reduced charges. In production this whole object
+ * comes from the invoice service.
+ */
+function buildRevisedInvoice(
+  invoice: PilotInvoice,
+  submittedAt: number,
+): RevisedInvoice {
+  const standby = round2(invoice.jobFee * STANDBY_SHARE);
+  const serviceFee = round2(invoice.jobFee - standby);
+
+  const charges: RevisedCharge[] = [
+    {
+      label: "Escort Service Fee",
+      sub: invoice.pricingType,
+      amount: serviceFee,
+      previousAmount: serviceFee,
+    },
+    {
+      label: "Standby / Waiting Charges",
+      sub: "Withdrawn after dispute review",
+      amount: 0,
+      previousAmount: standby,
+    },
+  ];
+
+  const chargesTotal = round2(charges.reduce((sum, c) => sum + c.amount, 0));
+  const processingFee = round2(
+    chargesTotal * PROCESSING_RATE + PROCESSING_FIXED,
+  );
+  const platformFee = round2(chargesTotal * PLATFORM_RATE);
+  const total = round2(chargesTotal + processingFee + platformFee);
+
+  return {
+    invoiceNumber: `${invoice.invoiceNumber}-R1`,
+    revisionOf: invoice.invoiceNumber,
+    revisionNumber: 1,
+    submittedAt,
+    revisedBy: invoice.pilotCompany ?? invoice.pilotDriver,
+    revisedByRole: invoice.pilotCompany
+      ? "Pilot Car Company Administrator"
+      : "Pilot Car Driver",
+    charges,
+    chargesTotal,
+    processingFee,
+    platformFee,
+    total,
+    previousTotal: invoice.total,
+    // Overwize collects its fees out of the payment, so the pilot car party is
+    // owed the charges they billed.
+    netPayable: round2(total - platformFee - processingFee),
+  };
 }
 
 /* ── presentational primitives ───────────────────────────── */
@@ -221,6 +378,23 @@ function StatusChip({
     >
       <span className={`w-1.5 h-1.5 rounded-full ${style.dot}`} aria-hidden />
       {status}
+    </span>
+  );
+}
+
+/** Marks an invoice that has been resubmitted, alongside its status chip. */
+function RevisedChip({ size = "default" }: { size?: "default" | "sm" }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border border-[#DDD6FE] bg-[#F5F3FF] font-semibold text-[#6D28D9] whitespace-nowrap ${
+        size === "sm" ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-[12px]"
+      }`}
+    >
+      <History
+        className={size === "sm" ? "w-3 h-3" : "w-3.5 h-3.5"}
+        aria-hidden
+      />
+      Revised
     </span>
   );
 }
@@ -312,6 +486,173 @@ function MoneyRow({
           {currency}
         </span>
       </p>
+    </div>
+  );
+}
+
+/** Money row that shows what a line used to be when the revision changed it. */
+function ChargeDiffRow({
+  label,
+  sub,
+  amount,
+  previousAmount,
+  currency,
+}: {
+  label: string;
+  sub?: string;
+  amount: number;
+  previousAmount?: number;
+  currency: string;
+}) {
+  const changed =
+    previousAmount !== undefined && round2(previousAmount) !== round2(amount);
+  const withdrawn = changed && amount === 0;
+
+  return (
+    <div className="flex items-start justify-between gap-4 py-2.5">
+      <div className="min-w-0">
+        <p
+          className={`text-[13px] ${
+            withdrawn ? "text-[#9ca3af] line-through" : "text-[#4a5565]"
+          }`}
+        >
+          {label}
+        </p>
+        {sub && <p className="text-[11px] text-[#9ca3af] mt-0.5">{sub}</p>}
+      </div>
+      <div className="shrink-0 text-right">
+        {changed && (
+          <p className="text-[11px] text-[#9ca3af] line-through tabular-nums leading-none">
+            ${money(previousAmount!)}
+          </p>
+        )}
+        <p
+          className={`text-[13px] font-semibold tabular-nums ${
+            changed ? "text-[#15803D] mt-1" : "text-[#101828]"
+          }`}
+        >
+          ${money(amount)}
+          <span className="text-[11px] font-medium text-[#9ca3af] ml-1">
+            {currency}
+          </span>
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/** Photos and documents are tinted apart so the file type reads at a glance. */
+const EVIDENCE_KIND_STYLE = {
+  photo: { tint: "#EFF6FF", color: "#2563EB", border: "#DBEAFE" },
+  document: { tint: "#FFF1F2", color: "#E11D48", border: "#FFE4E6" },
+} as const;
+
+/**
+ * Attachment row. Read-only in the sense that nothing can be changed, but the
+ * file itself can be saved to the device.
+ */
+function EvidenceRow({
+  item,
+  onDownload,
+  busy,
+}: {
+  item: EvidenceItem;
+  onDownload: () => void;
+  busy: boolean;
+}) {
+  const isPhoto = item.kind === "photo";
+  const Icon = isPhoto ? ImageIcon : FileText;
+  const style = EVIDENCE_KIND_STYLE[isPhoto ? "photo" : "document"];
+
+  return (
+    <div className="flex items-center gap-3 py-2.5">
+      <div
+        className="w-9 h-9 rounded-lg flex items-center justify-center shrink-0 border"
+        style={{ backgroundColor: style.tint, borderColor: style.border }}
+      >
+        <Icon className="w-4 h-4" style={{ color: style.color }} aria-hidden />
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <p className="text-[13px] font-medium text-[#101828] truncate">
+          {item.name}
+        </p>
+        <div className="flex items-center gap-1.5 mt-1">
+          <span
+            className="rounded px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide"
+            style={{ backgroundColor: style.tint, color: style.color }}
+          >
+            {extensionOf(item.name)}
+          </span>
+          <span className="text-[11px] text-[#9ca3af] truncate">
+            {item.size}
+          </span>
+        </div>
+      </div>
+
+      <button
+        onClick={onDownload}
+        disabled={busy}
+        aria-label={`Download ${item.name}`}
+        className="w-10 h-10 rounded-full flex items-center justify-center shrink-0 text-[#4a5565] cursor-pointer transition-colors duration-200 hover:bg-gray-100 active:bg-gray-200 disabled:opacity-50 disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F89823]"
+      >
+        {busy ? (
+          <span
+            className="w-4 h-4 border-2 border-[#9ca3af] border-t-transparent rounded-full animate-spin"
+            aria-hidden
+          />
+        ) : (
+          <Download className="w-4 h-4" aria-hidden />
+        )}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The driver's own attachments for a dispute, as one downloadable list.
+ * Rendered inside the dispute card rather than as a card of its own.
+ */
+function EvidenceList({ attachments }: { attachments: EvidenceItem[] }) {
+  const { showSnackbar } = useSnackbar();
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  if (attachments.length === 0) return null;
+
+  const handleDownload = async (item: EvidenceItem) => {
+    setBusyId(item.id);
+    try {
+      await downloadEvidence(item);
+      showSnackbar(`Downloading ${item.name}`, "success", 3000);
+    } catch {
+      showSnackbar(`Could not download ${item.name}`, "error", 4000);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div className="pt-3 border-t border-gray-100">
+      <div className="flex items-center gap-1.5">
+        <Paperclip className="w-3.5 h-3.5 text-[#9ca3af]" aria-hidden />
+        <p className="text-[11px] uppercase tracking-wide text-[#9ca3af] flex-1">
+          Supporting Evidence
+        </p>
+        <span className="text-[11px] text-[#9ca3af]">
+          {attachments.length} file{attachments.length === 1 ? "" : "s"}
+        </span>
+      </div>
+
+      <div className="divide-y divide-gray-100 mt-1">
+        {attachments.map((item) => (
+          <EvidenceRow
+            key={item.id}
+            item={item}
+            busy={busyId === item.id}
+            onDownload={() => handleDownload(item)}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -454,16 +795,20 @@ function CountdownCard({
 function InvoiceCard({
   invoice,
   status,
+  revision,
   displayCurrency,
   onViewDetails,
 }: {
   invoice: PilotInvoice;
   status: InvoiceStatus;
+  /** Present once the pilot car party has resubmitted (R-AC1). */
+  revision?: RevisedInvoice | null;
   displayCurrency: string;
   onViewDetails: () => void;
 }) {
   const rate = rateFor(invoice.currency, displayCurrency);
-  const total = rate ? round2(invoice.total * rate) : invoice.total;
+  const convert = (n: number) => (rate ? round2(n * rate) : n);
+  const total = convert(revision ? revision.total : invoice.total);
 
   return (
     <div className={CARD}>
@@ -477,7 +822,13 @@ function InvoiceCard({
               {invoice.jobKind} · {invoice.pricingType}
             </p>
           </div>
-          <StatusChip status={status} size="sm" />
+          <div className="shrink-0">
+            {revision ? (
+              <RevisedChip size="sm" />
+            ) : (
+              <StatusChip status={status} size="sm" />
+            )}
+          </div>
         </div>
 
         <div className="mt-3.5 pt-3.5 border-t border-gray-100 space-y-2.5">
@@ -514,13 +865,23 @@ function InvoiceCard({
 
         <div className="mt-3.5 pt-3.5 border-t border-gray-100 flex items-end justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-[11px] text-[#6b7280]">Total Amount Payable</p>
+            <p className="text-[11px] text-[#6b7280]">
+              {revision ? "Revised Amount Payable" : "Total Amount Payable"}
+            </p>
             <p className="text-[20px] font-bold text-[#101828] tabular-nums leading-tight">
               ${money(total)}
               <span className="text-[12px] font-medium text-[#9ca3af] ml-1">
                 {displayCurrency}
               </span>
             </p>
+            {revision && (
+              <p className="text-[11px] text-[#9ca3af] tabular-nums mt-0.5">
+                Was{" "}
+                <span className="line-through">
+                  ${money(convert(revision.previousTotal))}
+                </span>
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -528,9 +889,11 @@ function InvoiceCard({
       <button
         onClick={onViewDetails}
         className="w-full min-h-[48px] px-4 py-3 flex items-center justify-center gap-1.5 border-t border-gray-100 bg-[#FAFAFA] text-[14px] font-semibold text-[#101828] cursor-pointer transition-colors duration-200 hover:bg-[#F3F4F6] active:bg-[#ECECEC] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F89823] focus-visible:ring-offset-1"
-        aria-label={`View details for invoice on job ${invoice.jobNumber}`}
+        aria-label={`View ${
+          revision ? "revised invoice" : "details for invoice"
+        } on job ${invoice.jobNumber}`}
       >
-        View Details
+        {revision ? "View Revised Invoice" : "View Details"}
         <ChevronRight className="w-4 h-4" aria-hidden />
       </button>
     </div>
@@ -542,22 +905,27 @@ function InvoiceCard({
 function InvoiceDetails({
   invoice,
   status,
+  revision,
   remainingMs,
   reviewWindowMs,
   userRole,
   displayCurrency,
   dispute,
+  disputeEvidence,
   onBack,
   onApprove,
   onDispute,
 }: {
   invoice: PilotInvoice;
   status: InvoiceStatus;
+  revision?: RevisedInvoice | null;
   remainingMs: number;
   reviewWindowMs: number;
   userRole: "individual" | "company";
   displayCurrency: string;
   dispute?: DisputeData | null;
+  /** The driver's own attachments, normalised for listing and download. */
+  disputeEvidence: EvidenceItem[];
   onBack: () => void;
   onApprove: () => void;
   onDispute: () => void;
@@ -565,7 +933,12 @@ function InvoiceDetails({
   const rate = rateFor(invoice.currency, displayCurrency);
   const convert = (n: number) => (rate ? round2(n * rate) : n);
 
-  const canAct = userRole === "individual" && status === "Pending Review";
+  /**
+   * R-AC3 — a resubmitted invoice is read-only: no second dispute, and payment
+   * is completed through the web portal rather than here.
+   */
+  const canAct =
+    userRole === "individual" && status === "Pending Review" && !revision;
 
   // Portalled to <body> so it covers the Trip Details screen's own fixed
   // bottom bars, while a later-mounted dispute Sheet still layers above it.
@@ -583,10 +956,10 @@ function InvoiceDetails({
           </button>
           <div className="flex-1 text-center px-1">
             <h1 className="text-[16px] font-semibold text-[#101828] leading-tight">
-              Invoice Details
+              {revision ? "Revised Invoice" : "Invoice Details"}
             </h1>
             <p className="text-[11px] text-[#6b7280] mt-0.5">
-              {invoice.invoiceNumber}
+              {revision ? revision.invoiceNumber : invoice.invoiceNumber}
             </p>
           </div>
           <div className="w-11" />
@@ -596,15 +969,16 @@ function InvoiceDetails({
       {/* Scrollable body */}
       <div className="flex-1 overflow-y-auto overscroll-contain">
         <div className="px-4 py-4 space-y-4">
-          {/* AC8 — remaining review period */}
-          {status === "Pending Review" && (
+          {/* AC8 — remaining review period. A revised invoice has no mobile
+              auto-approval: it is settled from the web portal (R-AC3). */}
+          {status === "Pending Review" && !revision && (
             <CountdownCard
               remainingMs={remainingMs}
               windowMs={reviewWindowMs}
             />
           )}
 
-          {/* AC3 — Invoice Information (read-only) */}
+          {/* AC3 / R-AC2 — Invoice Information (read-only) */}
           <div className={CARD}>
             <CardHeading icon={Receipt} title="Invoice Information" />
             <div className="px-4 py-1 divide-y divide-gray-100">
@@ -616,54 +990,142 @@ function InvoiceDetails({
                 value={invoice.pilotCompany ?? "—"}
               />
               <InfoRow label="Pricing Type" value={invoice.pricingType} />
+              {/* R-AC2 — Invoice Status */}
               <InfoRow label="Invoice Status">
-                <StatusChip status={status} size="sm" />
+                {revision ? (
+                  <RevisedChip size="sm" />
+                ) : (
+                  <StatusChip status={status} size="sm" />
+                )}
               </InfoRow>
-              <InfoRow
-                label="Submitted"
-                value={formatDateTimeBullet(new Date(invoice.submittedAt))}
-              />
+              {revision ? (
+                <>
+                  <InfoRow
+                    label="Revision"
+                    value={`R${revision.revisionNumber} · replaces ${revision.revisionOf}`}
+                  />
+                  <InfoRow label="Resubmitted By" value={revision.revisedBy} />
+                  <InfoRow label="Role" value={revision.revisedByRole} />
+                  <InfoRow
+                    label="Resubmitted"
+                    value={formatDateTimeBullet(new Date(revision.submittedAt))}
+                  />
+                </>
+              ) : (
+                <InfoRow
+                  label="Submitted"
+                  value={formatDateTimeBullet(new Date(invoice.submittedAt))}
+                />
+              )}
             </div>
           </div>
 
-          {/* AC3 — Invoice Summary */}
-          <div className={CARD}>
-            <CardHeading
-              icon={Receipt}
-              title="Invoice Summary"
-              tint="#FFF3E0"
-              color="#D97706"
-            />
-            <div className="px-4 py-1">
-              <div className="divide-y divide-gray-100">
-                <MoneyRow
-                  label="Total Job Fee"
-                  amount={convert(invoice.jobFee)}
-                  currency={displayCurrency}
-                />
-                <MoneyRow
-                  label="Transaction Processing Fee"
-                  sub={`${(PROCESSING_RATE * 100).toFixed(1)}% + $${PROCESSING_FIXED.toFixed(2)}`}
-                  amount={convert(invoice.processingFee)}
-                  currency={displayCurrency}
-                />
-                <MoneyRow
-                  label="Platform Fee"
-                  sub={`Overwize ${(PLATFORM_RATE * 100).toFixed(0)}%`}
-                  amount={convert(invoice.platformFee)}
-                  currency={displayCurrency}
-                />
-              </div>
-              <div className="border-t-2 border-gray-100">
-                <MoneyRow
-                  label="Total Amount Payable"
-                  amount={convert(invoice.total)}
-                  currency={displayCurrency}
-                  strong
-                />
+          {/* R-AC2 — Updated Charges · Platform Fee · Invoice Total ·
+              Net Payable */}
+          {revision ? (
+            <div className={CARD}>
+              <CardHeading
+                icon={Receipt}
+                title="Updated Charges"
+                tint="#FFF3E0"
+                color="#D97706"
+              />
+              <div className="px-4 py-1">
+                <div className="divide-y divide-gray-100">
+                  {revision.charges.map((charge) => (
+                    <ChargeDiffRow
+                      key={charge.label}
+                      label={charge.label}
+                      sub={charge.sub}
+                      amount={convert(charge.amount)}
+                      previousAmount={
+                        charge.previousAmount === undefined
+                          ? undefined
+                          : convert(charge.previousAmount)
+                      }
+                      currency={displayCurrency}
+                    />
+                  ))}
+                </div>
+                <div className="border-t border-gray-200">
+                  <MoneyRow
+                    label="Updated Charges Subtotal"
+                    amount={convert(revision.chargesTotal)}
+                    currency={displayCurrency}
+                  />
+                </div>
+                <div className="divide-y divide-gray-100 border-t border-gray-100">
+                  <MoneyRow
+                    label="Transaction Processing Fee"
+                    sub={`${(PROCESSING_RATE * 100).toFixed(1)}% + $${PROCESSING_FIXED.toFixed(2)}`}
+                    amount={convert(revision.processingFee)}
+                    currency={displayCurrency}
+                  />
+                  <MoneyRow
+                    label="Platform Fee"
+                    sub={`Overwize ${(PLATFORM_RATE * 100).toFixed(0)}%`}
+                    amount={convert(revision.platformFee)}
+                    currency={displayCurrency}
+                  />
+                </div>
+                <div className="border-t-2 border-gray-100">
+                  <MoneyRow
+                    label="Invoice Total"
+                    sub="Payable by you"
+                    amount={convert(revision.total)}
+                    currency={displayCurrency}
+                    strong
+                  />
+                </div>
+                <div className="border-t border-gray-100">
+                  <MoneyRow
+                    label="Net Payable"
+                    amount={convert(revision.netPayable)}
+                    currency={displayCurrency}
+                  />
+                </div>
               </div>
             </div>
-          </div>
+          ) : (
+            /* AC3 — Invoice Summary */
+            <div className={CARD}>
+              <CardHeading
+                icon={Receipt}
+                title="Invoice Summary"
+                tint="#FFF3E0"
+                color="#D97706"
+              />
+              <div className="px-4 py-1">
+                <div className="divide-y divide-gray-100">
+                  <MoneyRow
+                    label="Total Job Fee"
+                    amount={convert(invoice.jobFee)}
+                    currency={displayCurrency}
+                  />
+                  <MoneyRow
+                    label="Transaction Processing Fee"
+                    sub={`${(PROCESSING_RATE * 100).toFixed(1)}% + $${PROCESSING_FIXED.toFixed(2)}`}
+                    amount={convert(invoice.processingFee)}
+                    currency={displayCurrency}
+                  />
+                  <MoneyRow
+                    label="Platform Fee"
+                    sub={`Overwize ${(PLATFORM_RATE * 100).toFixed(0)}%`}
+                    amount={convert(invoice.platformFee)}
+                    currency={displayCurrency}
+                  />
+                </div>
+                <div className="border-t-2 border-gray-100">
+                  <MoneyRow
+                    label="Total Amount Payable"
+                    amount={convert(invoice.total)}
+                    currency={displayCurrency}
+                    strong
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* AC12 — currency conversion note */}
           {rate && (
@@ -672,18 +1134,19 @@ function InvoiceDetails({
               {invoice.currency} using an exchange rate of 1 {invoice.currency} ={" "}
               {rate.toFixed(6)} {displayCurrency}.
               <span className="block mt-1.5 text-[#1E40AF]/70">
-                Original invoice total: ${money(invoice.total)}{" "}
+                {revision ? "Revised" : "Original"} invoice total: $
+                {money(revision ? revision.total : invoice.total)}{" "}
                 {invoice.currency}
               </span>
             </Notice>
           )}
 
-          {/* Dispute record */}
-          {status === "Payment Disputed" && dispute && (
+          {/* Dispute record — kept alongside the revision it produced */}
+          {dispute && (status === "Payment Disputed" || revision) && (
             <div className={CARD}>
               <CardHeading
                 icon={AlertTriangle}
-                title="Dispute Details"
+                title={revision ? "Your Dispute" : "Dispute Details"}
                 tint="#FFF1F2"
                 color="#E11D48"
               />
@@ -712,23 +1175,22 @@ function InvoiceDetails({
                     {formatDateTimeBullet(dispute.submittedOn)}
                   </p>
                 </div>
-                {dispute.evidence.length > 0 && (
-                  <div>
-                    <p className="text-[11px] uppercase tracking-wide text-[#9ca3af]">
-                      Evidence
-                    </p>
-                    <p className="text-[13px] text-[#4a5565] mt-0.5">
-                      {dispute.evidence.length} file
-                      {dispute.evidence.length === 1 ? "" : "s"} attached
-                    </p>
-                  </div>
-                )}
+                {/* R-AC2 — supporting evidence, downloadable */}
+                <EvidenceList attachments={disputeEvidence} />
               </div>
             </div>
           )}
 
+          {/* R-AC3 — payment happens outside the mobile app */}
+          {revision && (
+            <Notice tone="info" icon={Globe} title="Complete payment on the web">
+              Review the updated details here, then sign in to the Overwize web
+              portal to complete payment for {revision.invoiceNumber}.
+            </Notice>
+          )}
+
           {/* AC6 — company truck driver read-only message */}
-          {userRole === "company" && status === "Pending Review" && (
+          {userRole === "company" && status === "Pending Review" && !revision && (
             <Notice tone="neutral" icon={Lock} title="Read-only access">
               This invoice must be reviewed and approved by your Truck Company
               Administrator.
@@ -802,9 +1264,46 @@ export default function InvoiceTabContent({
     [relatedJobs],
   );
 
-  const [statuses, setStatuses] = useState<Record<string, InvoiceStatus>>({});
+  /**
+   * Disputes already resolved with a resubmitted invoice when the tab opens.
+   * Only jobs that actually have an invoice here are seeded.
+   */
+  const seeded = useMemo(() => {
+    const statuses: Record<string, InvoiceStatus> = {};
+    const disputes: Record<string, DisputeData | null> = {};
+    const evidence: Record<string, EvidenceItem[]> = {};
+    const revisions: Record<string, RevisedInvoice> = {};
+
+    invoices.forEach((invoice) => {
+      const seed = SEEDED_DISPUTES[invoice.jobNumber];
+      if (!seed) return;
+      const disputedAt = new Date(seed.dispute.submittedOn).getTime();
+      disputes[invoice.jobNumber] = seed.dispute;
+      evidence[invoice.jobNumber] = seed.evidence;
+      revisions[invoice.jobNumber] = buildRevisedInvoice(
+        invoice,
+        disputedAt + 4 * HOUR_MS,
+      );
+      // The revision re-enters review (R-AC1).
+      statuses[invoice.jobNumber] = "Pending Review";
+    });
+
+    return { statuses, disputes, evidence, revisions };
+  }, [invoices]);
+
+  const [statuses, setStatuses] = useState<Record<string, InvoiceStatus>>(
+    () => seeded.statuses,
+  );
   const [disputes, setDisputes] = useState<Record<string, DisputeData | null>>(
-    {},
+    () => seeded.disputes,
+  );
+  /** Driver-side attachments per job, normalised for listing and download. */
+  const [disputeEvidence, setDisputeEvidence] = useState<
+    Record<string, EvidenceItem[]>
+  >(() => seeded.evidence);
+  /** Resubmitted invoices, keyed by job number (R-AC1). */
+  const [revisions, setRevisions] = useState<Record<string, RevisedInvoice>>(
+    () => seeded.revisions,
   );
   const [openInvoice, setOpenInvoice] = useState<string | null>(null);
   const [disputeSheetFor, setDisputeSheetFor] = useState<string | null>(null);
@@ -816,8 +1315,10 @@ export default function InvoiceTabContent({
   const deadlineOf = (invoice: PilotInvoice) =>
     invoice.submittedAt + reviewWindowMs;
 
+  /* A revised invoice is settled from the web portal, so it takes no part in
+     the mobile review window or its auto approval (R-AC3). */
   const pendingCount = invoices.filter(
-    (i) => statusOf(i.jobNumber) === "Pending Review",
+    (i) => statusOf(i.jobNumber) === "Pending Review" && !revisions[i.jobNumber],
   ).length;
 
   /* AC9 — tick while anything is pending, auto approve on expiry. */
@@ -829,7 +1330,10 @@ export default function InvoiceTabContent({
 
   useEffect(() => {
     const expired = invoices.filter(
-      (i) => statusOf(i.jobNumber) === "Pending Review" && deadlineOf(i) <= now,
+      (i) =>
+        statusOf(i.jobNumber) === "Pending Review" &&
+        !revisions[i.jobNumber] &&
+        deadlineOf(i) <= now,
     );
     if (expired.length === 0) return;
 
@@ -859,6 +1363,41 @@ export default function InvoiceTabContent({
     deepLinkedRef.current = true;
     setOpenInvoice(focusInvoiceJobNumber);
   }, [focusInvoiceJobNumber, invoices]);
+
+  /* R-AC1 — the pilot car party resubmits after a dispute. Timers are tracked
+     per job so a second dispute never double-schedules, and so nothing fires
+     after the tab unmounts. */
+  const revisionTimersRef = useRef<
+    Record<string, ReturnType<typeof setTimeout>>
+  >({});
+
+  useEffect(
+    () => () => {
+      Object.values(revisionTimersRef.current).forEach(clearTimeout);
+      revisionTimersRef.current = {};
+    },
+    [],
+  );
+
+  const scheduleRevision = (jobNumber: string) => {
+    const invoice = invoices.find((i) => i.jobNumber === jobNumber);
+    if (!invoice || revisionTimersRef.current[jobNumber]) return;
+
+    revisionTimersRef.current[jobNumber] = setTimeout(() => {
+      delete revisionTimersRef.current[jobNumber];
+      setRevisions((prev) => ({
+        ...prev,
+        [jobNumber]: buildRevisedInvoice(invoice, Date.now()),
+      }));
+      // The revised invoice re-enters review (R-AC1).
+      setStatuses((prev) => ({ ...prev, [jobNumber]: "Pending Review" }));
+      showSnackbar(
+        `A revised invoice for job ${jobNumber} is ready to review.`,
+        "info",
+        5000,
+      );
+    }, REVISION_DELAY_MS);
+  };
 
   const active = invoices.find((i) => i.jobNumber === openInvoice) ?? null;
 
@@ -918,6 +1457,7 @@ export default function InvoiceTabContent({
             key={invoice.jobNumber}
             invoice={invoice}
             status={statusOf(invoice.jobNumber)}
+            revision={revisions[invoice.jobNumber]}
             displayCurrency={payerCurrency}
             onViewDetails={() => setOpenInvoice(invoice.jobNumber)}
           />
@@ -929,11 +1469,13 @@ export default function InvoiceTabContent({
         <InvoiceDetails
           invoice={active}
           status={statusOf(active.jobNumber)}
+          revision={revisions[active.jobNumber]}
           remainingMs={Math.max(0, deadlineOf(active) - now)}
           reviewWindowMs={reviewWindowMs}
           userRole={role}
           displayCurrency={payerCurrency}
           dispute={disputes[active.jobNumber]}
+          disputeEvidence={disputeEvidence[active.jobNumber] ?? []}
           onBack={() => setOpenInvoice(null)}
           onApprove={() => handleApprove(active.jobNumber)}
           onDispute={() => setDisputeSheetFor(active.jobNumber)}
@@ -951,10 +1493,16 @@ export default function InvoiceTabContent({
           onDisputeSubmitted={(data) => {
             const jobNumber = disputeSheetFor;
             setDisputes((prev) => ({ ...prev, [jobNumber]: data }));
+            setDisputeEvidence((prev) => ({
+              ...prev,
+              [jobNumber]: fromFiles(data.evidence, `${jobNumber}-dispute`),
+            }));
             setStatuses((prev) => ({
               ...prev,
               [jobNumber]: "Payment Disputed",
             }));
+            // The pilot car party reworks the invoice and resubmits (R-AC1).
+            scheduleRevision(jobNumber);
           }}
         />
       )}

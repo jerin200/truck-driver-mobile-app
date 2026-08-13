@@ -22,6 +22,9 @@ import Header from "./Header";
 import InvoiceReviewWidget, {
   PendingInvoiceSummary,
 } from "./InvoiceReviewWidget";
+import DisputedInvoiceWidget, {
+  DisputedInvoiceSummary,
+} from "./DisputedInvoiceWidget";
 
 interface PermitState {
   code: string;
@@ -312,18 +315,36 @@ const PENDING_INVOICE_REVIEWS: Omit<
     amount: 1134.96,
     currency: "USD",
   },
-  {
-    tripId: "REQ-1001",
-    jobNumber: "JOB-103",
-    pilotDriver: "James Williams",
-    pilotCompany: "Carolina Route Escorts",
-    amount: 1331.1,
-    currency: "USD",
-  },
 ];
 
 /** Backend-configurable review period before an invoice auto approves. */
 const INVOICE_REVIEW_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * Invoices the driver disputed. JOB-103 has already been resubmitted by the
+ * pilot car party, so it is read-only here and on the trip's Invoice tab —
+ * payment for a revised invoice is completed through the web portal.
+ */
+const DISPUTED_INVOICES: Omit<DisputedInvoiceSummary, "disputedAt">[] = [
+  {
+    tripId: "REQ-1001",
+    jobNumber: "JOB-103",
+    invoiceNumber: "INV-103-R1",
+    pilotDriver: "James Williams",
+    pilotCompany: "Carolina Route Escorts",
+    currency: "USD",
+    originalAmount: 1331.1,
+    revisedAmount: 1164.75,
+    reason: "Extra charges",
+    evidenceCount: 2,
+    stage: "revised",
+  },
+];
+
+/** How long ago each dispute was raised, in hours. */
+const DISPUTE_AGE_HOURS: Record<string, number> = { "JOB-103": 26 };
 
 const MOCK_STATE_JOBS: StateJob[] = [
   {
@@ -443,14 +464,30 @@ export default function DashboardOverview({
     }));
   }, []);
 
-  const handleReviewInvoice = (invoice: PendingInvoiceSummary) => {
-    const trip = MOCK_PERMITS.find((p) => p.requestId === invoice.tripId);
+  const disputedInvoices = useMemo(() => {
+    const mountedAt = Date.now();
+    return DISPUTED_INVOICES.map((invoice) => ({
+      ...invoice,
+      disputedAt:
+        mountedAt - (DISPUTE_AGE_HOURS[invoice.jobNumber] ?? 24) * HOUR_MS,
+    }));
+  }, []);
+
+  /** Both invoice widgets deep-link to the same place on the trip. */
+  const openInvoiceOnTrip = (tripId: string, jobNumber: string) => {
+    const trip = MOCK_PERMITS.find((p) => p.requestId === tripId);
     if (!trip || !onNavigate) return;
     onNavigate("view-permit-request", trip, {
       initialTab: "invoice",
-      focusInvoiceJobNumber: invoice.jobNumber,
+      focusInvoiceJobNumber: jobNumber,
     });
   };
+
+  const handleReviewInvoice = (invoice: PendingInvoiceSummary) =>
+    openInvoiceOnTrip(invoice.tripId, invoice.jobNumber);
+
+  const handleOpenDispute = (invoice: DisputedInvoiceSummary) =>
+    openInvoiceOnTrip(invoice.tripId, invoice.jobNumber);
 
   // Compute Stats
   const activeTripsCount = MOCK_PERMITS.filter(
@@ -618,6 +655,12 @@ export default function DashboardOverview({
             invoices={pendingInvoiceReviews}
             onReview={handleReviewInvoice}
             reviewWindowMs={INVOICE_REVIEW_WINDOW_MS}
+          />
+
+          {/* Disputed invoices, including revisions sent back for review */}
+          <DisputedInvoiceWidget
+            invoices={disputedInvoices}
+            onOpen={handleOpenDispute}
           />
 
           {/* Active Trip Card */}
