@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronLeft,
   ChevronUp,
+  ChevronDown,
   Bell,
   Truck,
   Gauge,
@@ -68,6 +69,12 @@ const JOB = {
   odometerReading: '48,213 mi',
   totalMiles: 342,
 };
+
+// Convoy jobs sitting in "waiting confirmation" — surfaced by the always-on map widget.
+const PENDING_JOBS = [
+  { id: 'JRS768_6547', type: 'Pilot/Escort Job', route: 'Calgary, AB → Regina, SK' },
+  { id: 'JRS768_6552', type: 'Pilot/Escort Job', route: 'Regina, SK → Winnipeg, MB' },
+];
 
 const bufferAmount = Math.round(JOB.jobAmount * (JOB.bufferPercent / 100) * 100) / 100;
 const holdAmount = Math.round((JOB.jobAmount + bufferAmount) * 100) / 100;
@@ -450,6 +457,7 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
 
   const [notification, setNotification] = useState<NotificationKind>(null);
   const [notifCollapsed, setNotifCollapsed] = useState(false);
+  const [jobsPanelOpen, setJobsPanelOpen] = useState(false);
   const [declinedOnce, setDeclinedOnce] = useState(false);
 
   const [toast, setToast] = useState<string | null>(null);
@@ -542,9 +550,12 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
   // ==========================================================
   // Notification overlay (renders on top of the live map when idle)
   // ==========================================================
-  const notificationOverlay = notification && (
+  const alertLive = !!notification;
+  const modalOpen = !!notification && !notifCollapsed;
+
+  const notificationOverlay = (
     <>
-      {!notifCollapsed && (
+      {modalOpen && (
         <>
           <div
             className="absolute inset-0 bg-black/40 z-40 animate-in fade-in duration-200"
@@ -709,14 +720,77 @@ export default function ConvoyJobFlow({ onExitToTrip = () => {}, reviewWindowMs 
         </>
       )}
 
-      {notifCollapsed && (
-        <button
-          onClick={() => setNotifCollapsed(false)}
-          className="absolute top-3 right-3 z-50 flex items-center gap-1.5 pl-2 pr-3 py-1.5 rounded-full bg-[#1a1a1a] text-white shadow-lg animate-in fade-in"
-        >
-          <Bell className="w-3.5 h-3.5 text-[#F89823]" />
-          <span className="text-[11px] font-semibold">1 New</span>
-        </button>
+      {/* Always-on convoy job alert — full-width card under the Live Tracking card so it
+          reads in a single glance while driving. Collapsed it states the count; expanded
+          it becomes an inset list of the jobs still awaiting confirmation. */}
+      {!modalOpen && (
+        <div className="absolute top-[120px] inset-x-3 z-50 animate-in fade-in slide-in-from-top-2 duration-300">
+          <div className="bg-[#FFFBF5] rounded-lg border border-[#F7E3C8] shadow-[0_1px_2px_rgba(180,83,9,0.06),0_10px_28px_-8px_rgba(180,83,9,0.22)] overflow-hidden">
+            <button
+              onClick={() => setJobsPanelOpen((open) => !open)}
+              aria-expanded={jobsPanelOpen}
+              aria-label={`${PENDING_JOBS.length} jobs waiting confirmation`}
+              className="w-full flex items-center gap-3.5 px-4 py-3.5 text-left cursor-pointer active:bg-[#FFF4E4] transition-colors duration-200"
+            >
+              <div className="relative w-10 h-10 rounded-[13px] bg-gradient-to-br from-[#F89823] to-[#E07C0E] shadow-[0_2px_8px_rgba(248,152,35,0.40)] flex items-center justify-center shrink-0">
+                <Bell className="w-[18px] h-[18px] text-white" />
+                <span className="absolute -top-1.5 -right-1.5 min-w-[19px] h-[19px] px-1 rounded-full bg-white ring-[1.5px] ring-[#F89823] flex items-center justify-center">
+                  {alertLive && (
+                    <span className="absolute -inset-0.5 rounded-full bg-[#F89823] opacity-30 animate-ping" />
+                  )}
+                  <span className="relative text-[10.5px] font-bold text-[#B45309] leading-none tabular-nums">
+                    {PENDING_JOBS.length}
+                  </span>
+                </span>
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <p className="text-[15.5px] font-semibold text-[#101828] leading-[1.25] tracking-[-0.01em]">
+                  {PENDING_JOBS.length} Jobs waiting confirmation
+                </p>
+
+              </div>
+
+              <div className="w-7 h-7 rounded-full bg-[#FFF0DC] flex items-center justify-center shrink-0">
+                <ChevronDown
+                  className={`w-4 h-4 text-[#D97706] transition-transform duration-200 ${jobsPanelOpen ? 'rotate-180' : ''}`}
+                />
+              </div>
+            </button>
+
+            {jobsPanelOpen && (
+              <div className="bg-white border-t border-[#F7E3C8] p-1.5 animate-in fade-in duration-200">
+                {PENDING_JOBS.map((job) => (
+                  <button
+                    key={job.id}
+                    onClick={() => {
+                      setJobsPanelOpen(false);
+                      openNotification(notification ?? 'pilotCarReady');
+                    }}
+                    className="w-full flex items-center gap-3 text-left px-2.5 py-2.5 rounded-2xl cursor-pointer active:bg-[#f7f7f8] transition-colors duration-200"
+                  >
+                    <div className="w-9 h-9 rounded-xl bg-[#EFF6FF] flex items-center justify-center shrink-0">
+                      <Truck className="w-[18px] h-[18px] text-[#2563EB]" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[14px] font-semibold text-[#101828] leading-[1.25] tracking-[-0.01em] tabular-nums truncate">
+                        #{job.id}
+                      </p>
+                      <p className="mt-[3px] text-[11.5px] font-medium text-[#6b7280] leading-[1.3] truncate">
+                        {job.type} · {job.route}
+                      </p>
+                      <span className="mt-1.5 inline-flex items-center gap-1 px-1.5 py-[3px] rounded-md bg-[#FFF3E0] text-[#B45309] text-[11px] font-semibold leading-none">
+                        <Timer className="w-[11px] h-[11px]" />
+                        Waiting confirmation
+                      </span>
+                    </div>
+                    <ChevronLeft className="w-4 h-4 text-[#c9c9c9] shrink-0 rotate-180" />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       )}
     </>
   );
